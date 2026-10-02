@@ -120,12 +120,12 @@ function schemaToType(
   }
 
   // Enums and consts narrow a typed schema (e.g. { type: 'string', enum: [...] }),
-  // so they must win over the plain type below
-  if (Array.isArray(schema.enum)) {
-    return schema.enum.map((v) => JSON.stringify(v)).join(' | ')
-  }
+  // so they must win over the plain type below. const is the narrower of the two
   if ('const' in schema) {
     return JSON.stringify(schema.const)
+  }
+  if (Array.isArray(schema.enum)) {
+    return schema.enum.map((v) => JSON.stringify(v)).join(' | ')
   }
 
   const schemaType = schema.type

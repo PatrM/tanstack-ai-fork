@@ -105,11 +105,13 @@ describe('jsonSchemaToTypeScript', () => {
       properties: {
         aggregation: { type: 'string', enum: ['sum', 'none'] },
         mode: { type: 'string', const: 'auto' },
+        scope: { type: 'string', enum: ['all', 'one'], const: 'one' },
       },
     }
     const result = jsonSchemaToTypeScript(schema, 'Measure')
     expect(result.declaration).toContain('aggregation?: "sum" | "none";')
     expect(result.declaration).toContain('mode?: "auto";')
+    expect(result.declaration).toContain('scope?: "one";')
   })
 
   it('keeps an enum or const on an object schema as a literal type', () => {
@@ -198,7 +200,14 @@ describe('generateTypeStubs', () => {
       external_fetch: {
         name: 'external_fetch',
         description: 'Fetch data from API',
-        inputSchema: { type: 'object', properties: {} },
+        inputSchema: {
+          type: 'object',
+          properties: { url: { type: 'string', description: 'Target URL' } },
+        },
+        outputSchema: {
+          type: 'object',
+          properties: { body: { type: 'string', description: 'Raw body' } },
+        },
         execute: async () => ({}),
       },
     }
