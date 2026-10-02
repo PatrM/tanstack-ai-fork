@@ -86,11 +86,14 @@ export function jsonSchemaToTypeScript(
 ): TypeResult {
   const type = schemaToType(schema, includeDescriptions)
 
-  // For object schemas with properties, create a named interface
+  // For object schemas with properties, create a named interface. An enum or
+  // const wins in schemaToType, so its literal type stays an inline alias
   if (
     schema.type === 'object' &&
     schema.properties &&
-    Object.keys(schema.properties).length > 0
+    Object.keys(schema.properties).length > 0 &&
+    !Array.isArray(schema.enum) &&
+    !('const' in schema)
   ) {
     return {
       name: typeName,

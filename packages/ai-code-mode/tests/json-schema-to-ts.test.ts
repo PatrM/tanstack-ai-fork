@@ -112,6 +112,20 @@ describe('jsonSchemaToTypeScript', () => {
     expect(result.declaration).toContain('mode?: "auto";')
   })
 
+  it('keeps an enum or const on an object schema as a literal type', () => {
+    const properties = { id: { type: 'string' } }
+    const withEnum = jsonSchemaToTypeScript(
+      { type: 'object', properties, enum: [{ id: 'a' }] },
+      'Choice',
+    )
+    expect(withEnum).toEqual({ name: '{"id":"a"}', declaration: '' })
+    const withConst = jsonSchemaToTypeScript(
+      { type: 'object', properties, const: { id: 'b' } },
+      'Choice',
+    )
+    expect(withConst).toEqual({ name: '{"id":"b"}', declaration: '' })
+  })
+
   it('emits property descriptions as JSDoc unless disabled', () => {
     const schema = {
       type: 'object',
