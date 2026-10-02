@@ -99,6 +99,34 @@ describe('jsonSchemaToTypeScript', () => {
     expect(result.name).toBe('"red" | "green" | "blue"')
   })
 
+  it('keeps enums and consts on typed schemas', () => {
+    const schema = {
+      type: 'object',
+      properties: {
+        aggregation: { type: 'string', enum: ['sum', 'none'] },
+        mode: { type: 'string', const: 'auto' },
+      },
+    }
+    const result = jsonSchemaToTypeScript(schema, 'Measure')
+    expect(result.declaration).toContain('aggregation?: "sum" | "none";')
+    expect(result.declaration).toContain('mode?: "auto";')
+  })
+
+  it('emits property descriptions as JSDoc unless disabled', () => {
+    const schema = {
+      type: 'object',
+      properties: {
+        unit: { type: 'string', description: 'ISO currency or %, e.g. */EUR' },
+      },
+    }
+    expect(jsonSchemaToTypeScript(schema, 'Measure').declaration).toBe(
+      'interface Measure {\n  /** ISO currency or %, e.g. *\\/EUR */\n  unit?: string;\n}',
+    )
+    expect(
+      jsonSchemaToTypeScript(schema, 'Measure', false).declaration,
+    ).not.toContain('/**')
+  })
+
   it('handles anyOf as union', () => {
     const schema = {
       anyOf: [{ type: 'string' }, { type: 'number' }],
