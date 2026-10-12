@@ -99,3 +99,47 @@ describe('OpenRouter text adapter retryCodes', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 })
+
+// OpenRouter sends status 200 when the provider accepts the request. A
+// provider error after that arrives as an error chunk in the stream.
+const rateLimitedChunk = () =>
+  new Response(
+    `data: ${JSON.stringify({
+      id: 'gen-1',
+      object: 'chat.completion.chunk',
+      created: 0,
+      model: 'openai/gpt-4o-mini',
+      error: { code: 429, message: 'Rate limited upstream' },
+      choices: [{ index: 0, delta: { content: '' }, finish_reason: 'error' }],
+    })}\n\ndata: [DONE]\n\n`,
+    { status: 200, headers: { 'content-type': 'text/event-stream' } },
+  )
+
+async function runError(retryCodes?: Array<string>) {
+  fetchMock.mockResolvedValueOnce(rateLimitedChunk())
+  const adapter = createOpenRouterText('openai/gpt-4o-mini', 'sk-or-test', {
+    retryConfig,
+    ...(retryCodes && { retryCodes }),
+  })
+  for await (const event of adapter.chatStream({
+    model: 'openai/gpt-4o-mini',
+    messages: [{ role: 'user', content: 'Hello' }],
+    logger: testLogger,
+  })) {
+    if (event.type === 'RUN_ERROR') return event
+  }
+  throw new Error('no RUN_ERROR')
+}
+
+describe('OpenRouter text adapter retryAfterMs', () => {
+  it('waits the backoff interval after an error chunk with a retried code', async () => {
+    const event = await runError(['429', '5XX'])
+    expect(event).toMatchObject({ code: '429', retryAfterMs: 1 })
+  })
+
+  it('sets no wait for an error chunk the SDK would not retry', async () => {
+    const event = await runError()
+    expect(event.code).toBe('429')
+    expect(event.retryAfterMs).toBeUndefined()
+  })
+})
