@@ -109,9 +109,10 @@ export interface TextAdapter<
   /**
    * The input kinds the model reads, at runtime, from the provider's model
    * metadata. `undefined` means not known. This mirrors the type-level
-   * `'~types'.inputModalities`, which has no runtime value.
+   * `'~types'.inputModalities`, which has no runtime value. `| undefined`
+   * keeps model lookups assignable under `exactOptionalPropertyTypes`.
    */
-  readonly inputModalities?: ReadonlyArray<Modality>
+  readonly inputModalities?: ReadonlyArray<Modality> | undefined
 
   /**
    * @internal Type-only properties for inference. Not assigned at runtime.
@@ -240,7 +241,7 @@ export abstract class BaseTextAdapter<
    * Provider subclasses override this from their model metadata, for example
    * `override readonly inputModalities = INPUT_BY_MODEL[this.model]`.
    */
-  readonly inputModalities?: ReadonlyArray<Modality> = undefined
+  readonly inputModalities?: ReadonlyArray<Modality> | undefined = undefined
 
   // Type-only property - never assigned at runtime
   declare '~types': {

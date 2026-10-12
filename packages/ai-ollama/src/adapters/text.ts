@@ -33,12 +33,7 @@ import type {
   Tool as OllamaTool,
   ToolCall,
 } from 'ollama'
-import type {
-  AdapterYieldChunk,
-  FetchWrapper,
-  TextOptions,
-  Tool,
-} from '@tanstack/ai'
+import type { AdapterYieldChunk, TextOptions, Tool } from '@tanstack/ai'
 
 export type OllamaTextModel =
   | (typeof OLLAMA_TEXT_MODELS)[number]
@@ -116,11 +111,20 @@ export class OllamaTextAdapter<TModel extends string> extends BaseTextAdapter<
     }
   }
 
-  /** Use a client whose fetch goes through `wrapFetch` for one call. */
-  private clientFor(wrapFetch: FetchWrapper | undefined) {
-    return wrapFetch && this.clientConfig
-      ? createOllamaClient(this.clientConfig, wrapFetch(fetch))
-      : this.client
+  /**
+   * Use a client for one call whose fetch carries the caller's abort signal
+   * and goes through `wrapFetch`. `ollama` takes no per-call signal, and its
+   * own stream signal only backs `abort()`, which this adapter never calls.
+   */
+  private clientFor(options: TextOptions) {
+    const { wrapFetch } = options
+    const signal = options.request?.signal ?? undefined
+    if (!this.clientConfig || (!wrapFetch && !signal)) return this.client
+    const send = wrapFetch ? wrapFetch(fetch) : fetch
+    return createOllamaClient(
+      this.clientConfig,
+      signal ? (input, init) => send(input, { ...init, signal }) : send,
+    )
   }
 
   async *chatStream(
@@ -134,7 +138,7 @@ export class OllamaTextAdapter<TModel extends string> extends BaseTextAdapter<
         `activity=chat provider=ollama model=${this.model} messages=${options.messages.length} tools=${options.tools?.length ?? 0} stream=true`,
         { provider: 'ollama', model: this.model },
       )
-      const response = await this.clientFor(options.wrapFetch).chat({
+      const response = await this.clientFor(options).chat({
         ...mappedOptions,
         stream: true,
       })
@@ -196,7 +200,7 @@ export class OllamaTextAdapter<TModel extends string> extends BaseTextAdapter<
         { provider: 'ollama', model: this.model },
       )
       // Make non-streaming request with JSON format
-      const response = await this.clientFor(chatOptions.wrapFetch).chat({
+      const response = await this.clientFor(chatOptions).chat({
         ...mappedOptions,
         stream: false,
         format: outputSchema,
