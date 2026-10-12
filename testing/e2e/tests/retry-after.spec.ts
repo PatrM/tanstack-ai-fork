@@ -52,3 +52,29 @@ test('chat({ retry }) calls the model again after a 429', async ({
   expect(types).toContain('RUN_FINISHED')
   expect(text).toBe('hello after the wait')
 })
+
+/**
+ * OpenRouter sends a provider 429 as an error chunk in a status-200 stream.
+ * The adapter gives that `RUN_ERROR` the backoff wait of its `retryConfig`, so
+ * `chat({ retry })` calls the model again.
+ */
+test('chat({ retry }) calls OpenRouter again after a 429 error chunk', async ({
+  request,
+}) => {
+  const res = await request.post(
+    '/api/retry-after?mode=openrouter-stream-error',
+  )
+  expect(res.ok()).toBe(true)
+
+  const { types, text, calls } = (await res.json()) as {
+    types: Array<string>
+    text: string
+    calls: number
+  }
+
+  expect(calls).toBe(2)
+  expect(types).not.toContain('RUN_ERROR')
+  expect(types.filter((t) => t === 'RUN_STARTED')).toHaveLength(1)
+  expect(types).toContain('RUN_FINISHED')
+  expect(text).toBe('hello after the wait')
+})
