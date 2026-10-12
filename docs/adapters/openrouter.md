@@ -94,7 +94,7 @@ Now a 429 waits, then retries, and the chat continues with the next response.
 
 ### Retry a rate limit in the stream
 
-OpenRouter sends status 200 when the provider accepts the request. A provider 429 after that comes in the stream, and the SDK cannot retry it. Pass `retry` to `chat()`, for example `retry: { maxRetries: 3 }`. For a status in `retryCodes`, `chat()` waits the `initialInterval` of `retryConfig`, then calls the model again. See [Let `chat()` retry for you](../chat/stream-events#let-chat-retry-for-you).
+OpenRouter sends status 200 when the provider accepts the request. A provider 429 after that comes in the stream, and the SDK cannot retry it. Pass `retry` to `chat()`, for example `retry: { maxRetries: 3 }`. For a status in `retryCodes`, `chat()` waits the `initialInterval` of `retryConfig`, then calls the model again. It retries only when the call streamed no output yet. An error after part of the answer reaches you as a `RUN_ERROR`. See [Let `chat()` retry for you](../chat/stream-events#let-chat-retry-for-you).
 
 ## Available Models
 
