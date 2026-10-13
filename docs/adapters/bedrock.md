@@ -181,7 +181,9 @@ const adapter = createBedrockText(
 
 ### Prompt caching
 
-Add a `cachePoint` to make a prompt prefix eligible for caching. Later requests can read matching tokens at the reduced cache rate. Bedrock bills cache misses at the standard input rate.
+`chat()` adds cache points for Claude models by default: one after the system prompt, and one at the end of the last user message. Pass `promptCache: 'long'` for the 1-hour cache, or `promptCache: 'none'` to turn it off. Other models get no automatic cache point. For the cost, see [Prompt Caching](../advanced/prompt-caching).
+
+To pick the places yourself, add a `cachePoint`. One cache point of your own turns the automatic ones off for that request. Later requests can read matching tokens at the reduced cache rate. Bedrock bills cache misses at the standard input rate.
 
 Explicit prompt caching is model-dependent. Use `cachePoint` only with a model that AWS lists as supporting it. The minimum checkpoint size and the TTL options also vary by model.
 
@@ -286,6 +288,37 @@ for await (const chunk of chat({
   if (chunk.type === 'TEXT_MESSAGE_CONTENT') process.stdout.write(chunk.delta ?? '')
 }
 ```
+
+## Reasoning
+
+Set `reasoning` on `chat()`. What goes on the wire depends on the API:
+
+- Converse (the default): only Claude gets thinking. A budget model gets `thinking` with a budget in `additionalModelRequestFields`, and `maxTokens` grows past the budget. `off` sends nothing.
+- Chat Completions (`api: 'chat'`): `reasoning_effort`.
+- Responses (`api: 'responses'`): `reasoning.effort`.
+
+```typescript
+import { chat } from "@tanstack/ai";
+import { bedrockText } from "@tanstack/ai-bedrock";
+
+const stream = chat({
+  adapter: bedrockText("us.anthropic.claude-haiku-4-5-20251001-v1:0", {
+    region: "us-east-1",
+  }),
+  messages: [{ role: "user", content: "Check this proof." }],
+  reasoning: { level: "high", budgetTokens: 8000 },
+});
+```
+
+The levels of each model:
+
+- `us.anthropic.claude-haiku-4-5-*`, `us.anthropic.claude-sonnet-4-5-*`: `off`, `high`, with `budgetTokens`.
+- `openai.gpt-oss-120b-1:0`, `openai.gpt-oss-20b-1:0`: `low`, `medium`, `high`.
+- The `google.gemma-4` models: `off`, `high`.
+
+The other models take no `reasoning`. `us.deepseek.r1-v1:0` always thinks, and has no levels.
+
+On Converse, structured output forces a tool, and Claude cannot think while a tool is forced. So the structured output call sends no thinking.
 
 ## Embeddings
 

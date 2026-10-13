@@ -8,6 +8,7 @@
 import { devtoolsMiddleware } from '@tanstack/ai-event-client'
 import { undoNullWidening } from '@tanstack/ai-utils'
 import { streamToText } from '../../stream-to-response.js'
+import { normalizeReasoning } from '../../reasoning'
 import { resolveDebugOption } from '../../logger/resolve'
 import { EventType } from '../../types'
 import {
@@ -55,6 +56,8 @@ import { buildBlockOrder } from '../../utilities/block-order'
 import type { BlockOrderEntry } from '../../utilities/block-order'
 import { assertMessagesFileSourceSupport } from '../../utilities/content-source'
 import { sanitizeProviderRequest } from '../../utilities/sanitize-unicode'
+import { planMidConversationChanges } from '../../utilities/mid-conversation'
+import { normalizeSystemPrompts } from '../../system-prompts'
 import { transformMessagesForReplay } from '../../utilities/replay-messages'
 import { LazyToolManager } from './tools/lazy-tool-manager'
 import { assertUniqueToolNames } from './tools/unique-tool-names'
@@ -128,7 +131,10 @@ import type {
   McpInputRequest,
   ToolResult,
 } from './tools/tool-calls'
-import type { ApprovalSchemaConfig } from './tools/tool-definition'
+import type {
+  ApprovalSchemaConfig,
+  InferToolName,
+} from './tools/tool-definition'
 import type {
   AnyTextAdapter,
   StructuredOutputOptions,
@@ -146,9 +152,12 @@ import type {
   Interrupt,
   JSONSchema,
   LazyToolsConfig,
+  MidConversationChange,
   ModelMessage,
   ModelMessageBlock,
+  PromptCacheOptions,
   ProviderTool,
+  ResolvedPromptCache,
   RunFinishedEvent,
   SchemaInput,
   StreamChunk,
@@ -164,6 +173,7 @@ import type {
   ToolCallEndEvent,
   ToolCallResultEvent,
   ToolCallStartEvent,
+  ToolChoice,
   FetchWrapper,
   ToolInputResponse,
   UIMessage,
@@ -192,6 +202,11 @@ import type {
   UnionToIntersection,
 } from './runtime-context-types'
 import type { ChatMCPOptions } from './mcp/types'
+import type {
+  AdapterReasoning,
+  ReasoningOption,
+  ReasoningOptionFor,
+} from '../../reasoning'
 
 /** One entry of the per-iteration arrival order (see `turnParts`). */
 type TurnPart =
@@ -457,6 +472,12 @@ type ExactMiddlewareOption<
         : CheckInterruptRegistry<TInterrupts, TMiddleware>) &
       CheckCoverage<Extract<TMiddleware, ReadonlyArray<AnyChatMiddleware>>>
 
+/** The `name` literals of a `tools` array. */
+type ToolNames<TTools> =
+  TTools extends ReadonlyArray<infer TTool>
+    ? Extract<InferToolName<TTool>, string>
+    : never
+
 type TextActivityOptionsWithContext<
   TAdapter extends AnyTextAdapter,
   TSchema extends SchemaInput | undefined,
@@ -469,9 +490,11 @@ type TextActivityOptionsWithContext<
   TAgents extends ReadonlyArray<DefinedAgent> = ReadonlyArray<DefinedAgent>,
 > = Omit<
   TextActivityOptions<TAdapter, TSchema, TStream, any, TAgents>,
-  'tools' | 'middleware' | 'context' | 'interrupts'
+  'tools' | 'middleware' | 'context' | 'interrupts' | 'toolChoice'
 > & {
   tools?: TTools
+  /** {@link TextActivityOptions.toolChoice}, with the names of `tools` as suggestions. */
+  toolChoice?: ToolChoice<ToolNames<TTools>>
   interrupts?: TInterrupts & CheckUniqueInterruptDefinitions<TInterrupts>
   middleware?: ExactMiddlewareOption<TTools, TContext, TInterrupts, TMiddleware>
 } & RuntimeContextOption<TTools, TMiddleware, TContext>
@@ -554,6 +577,13 @@ export interface TextActivityOptions<
   metadata?: TextOptions['metadata']
   /** Model-specific provider options (type comes from adapter) */
   modelOptions?: TAdapter['~types']['providerOptions']
+  /**
+   * How hard the model thinks: a level (`'low'`, `'high'`, ...) or
+   * `{ level, summary?, budgetTokens? }`. The types allow only the model's own
+   * levels. Not set: the provider default applies. `'off'` turns thinking off.
+   * A level the model does not support at runtime moves to the nearest one.
+   */
+  reasoning?: ReasoningOptionFor<AdapterReasoning<TAdapter>>
   /** AbortController for cancellation */
   abortController?: TextOptions['abortController']
   /** Strategy for controlling the agent loop */
@@ -579,6 +609,30 @@ export interface TextActivityOptions<
   conversationId?: TextOptions['conversationId']
   /** Thread/conversation ID for AG-UI protocol. Auto-generated if not provided. */
   threadId?: TextOptions['threadId']
+  /**
+   * How the model uses the tools: `'auto'`, `'none'`, `'required'`, or
+   * `{ type: 'tool', name }`. It applies to every model call of this
+   * `chat()`. A middleware `onConfig` can change it for one call. A call with
+   * no tools sends no tool choice. A provider value in `modelOptions` wins.
+   *
+   * @example
+   * ```ts
+   * chat({ adapter, messages, tools, toolChoice: 'required' })
+   * ```
+   */
+  toolChoice?: ToolChoice
+
+  /**
+   * Automatic prompt caching. Default `'short'`. `'none'` turns it off.
+   * The key defaults to the `threadId` or `conversationId` that you give.
+   *
+   * @example
+   * ```ts
+   * chat({ adapter, messages, threadId, promptCache: 'long' })
+   * chat({ adapter, messages, promptCache: { retention: 'long', key: 'k-1' } })
+   * ```
+   */
+  promptCache?: PromptCacheOptions
   /**
    * Wraps the fetch of each model call. It can change the base URL, the
    * headers, the request, or the response. A middleware `onConfig` can add
@@ -898,6 +952,11 @@ class TextEngine<
     InterruptDefinition<any, any, any, any>
   >
   private params: TParams
+  /**
+   * The tool choice of the next model call. `params.toolChoice` keeps the
+   * `chat()` option, so a middleware value lasts for one call only.
+   */
+  private callToolChoice: ToolChoice | undefined = undefined
   /** The composed fetch wrapper of the next model call. */
   private callWrapFetch: FetchWrapper | undefined = undefined
   private systemPrompts: Array<SystemPrompt>
@@ -940,6 +999,13 @@ class TextEngine<
    * the order could no longer be tracked (callers fall back to one message).
    */
   private turnParts: Array<TurnPart> | null = []
+  /**
+   * The mid-conversation record of the current model call. The first
+   * assistant message that the call produces takes it. A call that produces
+   * none (an error, an abort) saves nothing, and the next call plans again.
+   */
+  private pendingMidConversationChange: MidConversationChange | undefined =
+    undefined
   private currentThinkingContent = ''
   private currentThinkingSignature = ''
   private currentThinkingRedacted = false
@@ -1066,7 +1132,13 @@ class TextEngine<
       ).map((definition) => [definition.id, definition]),
     )
     this.finalStructuredOutput = config.finalStructuredOutput
-    this.params = config.params
+    this.params = {
+      ...config.params,
+      // `chat()` takes a level or an object. Adapters read one shape.
+      reasoning: normalizeReasoning(
+        config.params.reasoning as ReasoningOption | undefined,
+      ),
+    }
     this.systemPrompts = config.params.systemPrompts || []
     this.loopStrategy =
       config.params.agentLoopStrategy || maxIterationsStrategy(5)
@@ -1700,7 +1772,7 @@ class TextEngine<
   }
 
   private async *streamModelResponse(): AsyncGenerator<StreamChunk> {
-    const { metadata, modelOptions } = this.params
+    const { metadata, modelOptions, reasoning } = this.params
     const tools = this.tools
 
     // Convert tool schemas to JSON Schema before passing to adapter
@@ -1756,11 +1828,31 @@ class TextEngine<
     // covered too.
     assertMessagesFileSourceSupport(this.adapter, this.messages)
 
+    // Providers reject a tool choice on a request with no tools.
+    const toolChoice =
+      toolsWithJsonSchemas.length > 0 ? this.callToolChoice : undefined
+
     // Clean history for the request. The adapter knows its wire API, so it
-    // does the source-sensitive part of replay.
+    // does the source-sensitive part of replay. Plan on this same array:
+    // a second replay must keep the length, so `before` indexes still match.
     const replayMessages = transformMessagesForReplay(
       this.providerMessages,
     ).messages
+    // Mid-conversation changes, only for an adapter with a channel that is
+    // on. Every other adapter gets today's request and no new field.
+    const channels = this.adapter.midConversationChannels
+    const midConversation =
+      channels?.tools || channels?.systemPrompts
+        ? planMidConversationChanges({
+            messages: replayMessages,
+            toolNames: tools.map((tool) => tool.name),
+            systemPrompts: normalizeSystemPrompts(this.systemPrompts).map(
+              (prompt) => prompt.content,
+            ),
+          })
+        : undefined
+    this.pendingMidConversationChange = midConversation?.record
+
     const streamOptions = {
       model: this.params.model,
       ...sanitizeProviderRequest(replayMessages, this.systemPrompts),
@@ -1768,14 +1860,20 @@ class TextEngine<
       metadata,
       request: this.effectiveRequest,
       modelOptions,
+      ...(reasoning ? { reasoning } : {}),
       logger: this.logger,
       threadId: this.threadId,
+      promptCache: this.params.promptCache,
+      ...(midConversation
+        ? { midConversationChanges: midConversation.changes }
+        : {}),
       runId: this.runIdOverride,
       parentRunId: this.parentRunIdOverride,
       // Expose provided capabilities (e.g. sandbox) to harness adapters.
       capabilities: this.middlewareCtx,
       // Client approval decisions, for harness interactive-approval resolution.
       approvals: adapterApprovals,
+      ...(toolChoice ? { toolChoice } : {}),
       ...(this.callWrapFetch ? { wrapFetch: this.callWrapFetch } : {}),
       ...(combinedSchema ? { outputSchema: combinedSchema } : {}),
     }
@@ -2929,6 +3027,7 @@ class TextEngine<
 
   private addAssistantToolCallMessage(toolCalls: Array<ToolCall>): void {
     this.finalizeCurrentThinkingStep()
+    const from = this.messages.length
 
     const segments = this.buildOrderedAssistantSegments(
       toolCalls,
@@ -2952,6 +3051,7 @@ class TextEngine<
         },
       ]),
     ]
+    this.saveMidConversationChange(from)
     this.middlewareCtx.messages = this.messages
   }
 
@@ -3079,7 +3179,33 @@ class TextEngine<
     }
 
     this.messages = messages
+    // An in-place update does not grow the array. The assistant message is
+    // already at existingStructuredIndex, so a search from the old length
+    // misses it and leaves the record pending.
+    this.saveMidConversationChange(
+      messages.length === startedLength
+        ? existingStructuredIndex
+        : startedLength,
+    )
     this.middlewareCtx.messages = this.messages
+  }
+
+  /**
+   * Save the pending mid-conversation record on the first assistant message
+   * at index `from` or later. The record is a field of the message, so it
+   * goes wherever the transcript goes: a message store, a restart.
+   */
+  private saveMidConversationChange(from: number): void {
+    const record = this.pendingMidConversationChange
+    if (!record) return
+    const index = this.messages.findIndex(
+      (message, at) => at >= from && message.role === 'assistant',
+    )
+    if (index < 0) return
+    this.pendingMidConversationChange = undefined
+    this.messages = this.messages.map((message, at) =>
+      at === index ? { ...message, midConversationChange: record } : message,
+    )
   }
 
   /**
@@ -3306,7 +3432,7 @@ class TextEngine<
       const id = `mcp_input_${pendingInput.toolCallId}`
       interrupts.push({
         id,
-        reason: 'mcp_input',
+        reason: pendingInput.reason ?? 'mcp_input',
         message: `Input required to run ${pendingInput.toolName}`,
         toolCallId: pendingInput.toolCallId,
         metadata: {
@@ -4179,11 +4305,15 @@ class TextEngine<
 
     this.middlewareCtx.phase = 'structuredOutput'
 
-    // Build the structured-output config view. `tools` is intentionally
-    // excluded from the type because it isn't forwarded to the structured-
-    // output adapter call — including it here would be misleading API.
+    // Build the structured-output config view. `tools` and `toolChoice` are
+    // intentionally excluded from the type because they aren't forwarded to
+    // the structured-output adapter call — including them would be misleading.
     const baseConfig = this.buildMiddlewareConfig()
-    const { tools: _omitTools, ...baseWithoutTools } = baseConfig
+    const {
+      tools: _omitTools,
+      toolChoice: _omitToolChoice,
+      ...baseWithoutTools
+    } = baseConfig
     let structuredConfig: StructuredOutputMiddlewareConfig = {
       ...baseWithoutTools,
       outputSchema: this.finalStructuredOutput.jsonSchema,
@@ -4231,8 +4361,12 @@ class TextEngine<
         ),
         metadata: postOnConfig.metadata,
         modelOptions: postOnConfig.modelOptions,
+        ...(postOnConfig.reasoning
+          ? { reasoning: postOnConfig.reasoning }
+          : {}),
         logger: this.logger,
         threadId: this.threadId,
+        promptCache: this.params.promptCache,
         runId: this.runIdOverride,
         parentRunId: this.parentRunIdOverride,
         ...(this.effectiveRequest ? { request: this.effectiveRequest } : {}),
@@ -4743,6 +4877,9 @@ class TextEngine<
       },
       metadata: this.params.metadata,
       modelOptions: this.params.modelOptions,
+      reasoning: this.params.reasoning,
+      toolChoice: this.params.toolChoice,
+      promptCache: this.params.promptCache,
       wrapFetch: this.params.wrapFetch,
     }
   }
@@ -5215,7 +5352,11 @@ class TextEngine<
       ...this.params,
       metadata: config.metadata,
       modelOptions: config.modelOptions,
+      reasoning: config.reasoning,
+      promptCache: config.promptCache ?? this.params.promptCache,
     }
+    // Not stored in params: the next call starts from the chat() option.
+    this.callToolChoice = config.toolChoice ?? this.params.toolChoice
     // Not stored in params: the next call starts from the chat() option,
     // which the config already holds.
     this.callWrapFetch = config.wrapFetch
@@ -5553,9 +5694,32 @@ type RuntimeTextActivityOptions<
   TStream extends boolean,
 > = Omit<
   TextActivityOptions<TAdapter, TSchema, TStream, any, any>,
-  'middleware'
+  'middleware' | 'promptCache'
 > & {
   middleware?: Array<AnyChatMiddleware>
+  promptCache: ResolvedPromptCache
+}
+
+/**
+ * Resolve the `promptCache` option once, before chat() makes up any ids. The
+ * key is the option key, else the caller's threadId or conversationId. A
+ * made-up threadId is never the key: a random key splits OpenAI cache routing.
+ */
+function resolvePromptCache(options: {
+  promptCache?: PromptCacheOptions
+  threadId?: string
+  conversationId?: string
+}): ResolvedPromptCache {
+  const option: Exclude<PromptCacheOptions, string> | undefined =
+    typeof options.promptCache === 'string'
+      ? { retention: options.promptCache }
+      : options.promptCache
+  // `||` on purpose: an empty string is no key.
+  const key = option?.key || options.threadId || options.conversationId
+  return {
+    retention: option?.retention ?? 'short',
+    ...(key ? { key } : {}),
+  }
 }
 
 function readRuntimeMiddleware(
@@ -5601,6 +5765,7 @@ function toRuntimeTextActivityOptions<
   return {
     ...rest,
     ...overrides,
+    promptCache: resolvePromptCache(rest),
     ...(middleware === undefined
       ? {}
       : { middleware: readRuntimeMiddleware(middleware) }),

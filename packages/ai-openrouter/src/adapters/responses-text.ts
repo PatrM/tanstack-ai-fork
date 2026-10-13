@@ -9,6 +9,7 @@ import { BaseTextAdapter } from '@tanstack/ai/adapters'
 import {
   hashToolCallId,
   orderedAssistantBlocks,
+  resolveReasoning,
   tanstackMetadata,
   toRunErrorPayload,
   toRunErrorRawEvent,
@@ -23,7 +24,11 @@ import {
   convertFunctionToolToResponsesFormat,
   createToolInputNormalizer,
 } from '../internal/responses-tool-converter'
-import { OPENROUTER_MODEL_INPUT_MODALITIES } from '../model-meta'
+import {
+  OPENROUTER_MODEL_INPUT_MODALITIES,
+  OPENROUTER_MODEL_REASONING,
+} from '../model-meta'
+import { openRouterEffort } from '../internal/reasoning'
 import { isWebSearchTool } from '../tools/web-search-tool'
 import { isWebFetchTool } from '../tools/web-fetch-tool'
 import { getOpenRouterApiKeyFromEnv } from '../utils'
@@ -35,6 +40,7 @@ import type {
   InputsUnion,
   OpenResponsesResult,
   OutputItems,
+  ReasoningEffort,
   ResponsesRequest,
   StreamEvents,
 } from '@openrouter/sdk/models'
@@ -48,12 +54,14 @@ import type {
   ModelMessage,
   AdapterYieldChunk,
   TextOptions,
+  ToolChoice,
 } from '@tanstack/ai'
 import type { ExternalResponsesProviderOptions } from '../text/responses-provider-options'
 import type {
   OPENROUTER_CHAT_MODELS,
   OpenRouterChatModelToolCapabilitiesByName,
   OpenRouterModelInputModalitiesByName,
+  OpenRouterModelReasoningByName,
 } from '../model-meta'
 import type {
   OpenRouterMessageMetadataByModality,
@@ -84,6 +92,12 @@ export type OpenRouterResponsesTextModels =
 export type OpenRouterResponsesTextProviderOptions =
   ExternalResponsesProviderOptions
 
+/** The reasoning levels of a model, for `chat({ reasoning })`. `never`: none. */
+type ResolveReasoning<TModel extends string> =
+  TModel extends keyof OpenRouterModelReasoningByName
+    ? OpenRouterModelReasoningByName[TModel]
+    : never
+
 type ResolveInputModalities<TModel extends string> =
   TModel extends keyof OpenRouterModelInputModalitiesByName
     ? OpenRouterModelInputModalitiesByName[TModel]
@@ -93,6 +107,14 @@ type ResolveToolCapabilities<TModel extends string> =
   TModel extends keyof OpenRouterChatModelToolCapabilitiesByName
     ? NonNullable<OpenRouterChatModelToolCapabilitiesByName[TModel]>
     : readonly []
+
+/** Maps `chat({ toolChoice })` to the OpenRouter Responses `toolChoice`. */
+function toOpenRouterResponsesToolChoice(
+  choice: ToolChoice,
+): NonNullable<ResponsesRequest['toolChoice']> {
+  if (typeof choice === 'string') return choice
+  return { type: 'function', name: choice.name }
+}
 
 /**
  * OpenRouter Responses (beta) Adapter — standalone implementation that talks
@@ -121,7 +143,9 @@ export class OpenRouterResponsesTextAdapter<
   ResolveInputModalities<TModel>,
   OpenRouterMessageMetadataByModality,
   TToolCapabilities,
-  OpenRouterResponsesToolCallMetadata
+  OpenRouterResponsesToolCallMetadata,
+  never,
+  ResolveReasoning<TModel>
 > {
   override readonly kind = 'text' as const
   readonly name = 'openrouter-responses' as const
@@ -1831,6 +1855,22 @@ export class OpenRouterResponsesTextAdapter<
           )
         : undefined
 
+    // `chat({ reasoning })`: the effort, a summary so the thinking text
+    // streams back, and the token budget when the request sets one.
+    // `ReasoningEffort` is an open enum, so a newer value still goes out.
+    const resolved = resolveReasoning(
+      options.reasoning,
+      OPENROUTER_MODEL_REASONING[this.model],
+    )
+    const effort = openRouterEffort(resolved)
+
+    // `chat({ toolChoice })` is sent only when the request has tools. It goes
+    // before the `modelOptions` spread, so a `toolChoice` there wins.
+    const toolChoiceField =
+      tools?.length && options.toolChoice !== undefined
+        ? { toolChoice: toOpenRouterResponsesToolChoice(options.toolChoice) }
+        : undefined
+
     const built: Pick<
       ResponsesRequest,
       | 'model'
@@ -1844,7 +1884,9 @@ export class OpenRouterResponsesTextAdapter<
       | 'toolChoice'
       | 'parallelToolCalls'
       | 'text'
+      | 'reasoning'
     > = {
+      ...toolChoiceField,
       ...modelOptions,
       model: options.model + variantSuffix,
       // Root `metadata` is observability-only and intentionally not forwarded:
@@ -1861,6 +1903,18 @@ export class OpenRouterResponsesTextAdapter<
       ...(tools &&
         tools.length > 0 && {
           tools,
+        }),
+      ...(resolved &&
+        effort && {
+          reasoning: {
+            effort: effort as ReasoningEffort,
+            ...(resolved.summary && resolved.level !== 'off'
+              ? { summary: 'auto' as const }
+              : {}),
+            ...(resolved.budgetTokens !== undefined
+              ? { maxTokens: resolved.budgetTokens }
+              : {}),
+          },
         }),
       ...(combinedSchema && {
         // Merge onto any caller-supplied `text` (spread above via
