@@ -5,6 +5,7 @@ import {
   unsupportedFileSourceError,
 } from '@tanstack/ai'
 import {
+  resolveReasoning,
   tanstackMetadata,
   toRunErrorPayload,
   toRunErrorRawEvent,
@@ -13,11 +14,12 @@ import { BaseTextAdapter } from '@tanstack/ai/adapters'
 import { buildOllamaUsage } from '../usage'
 import { createOllamaClient, generateId, getOllamaHostFromEnv } from '../utils'
 import { convertToolsToProviderFormat } from '../tools/tool-converter'
+import { OLLAMA_MODEL_REASONING, OLLAMA_TEXT_MODELS } from '../model-meta'
 import type { OllamaClientConfig } from '../utils/client'
 
 import type {
-  OLLAMA_TEXT_MODELS,
   OllamaChatModelOptionsByName,
+  OllamaModelReasoningByName,
 } from '../model-meta'
 import type {
   StructuredOutputOptions,
@@ -33,7 +35,13 @@ import type {
   Tool as OllamaTool,
   ToolCall,
 } from 'ollama'
-import type { AdapterYieldChunk, TextOptions, Tool } from '@tanstack/ai'
+import type {
+  AdapterYieldChunk,
+  ModelReasoning,
+  ReasoningRequest,
+  TextOptions,
+  Tool,
+} from '@tanstack/ai'
 
 export type OllamaTextModel =
   | (typeof OLLAMA_TEXT_MODELS)[number]
@@ -46,7 +54,47 @@ export type OllamaTextModel =
 type ResolveModelOptions<TModel extends string> =
   TModel extends keyof OllamaChatModelOptionsByName
     ? OllamaChatModelOptionsByName[TModel]
-    : ChatRequest
+    : Omit<ChatRequest, 'think'>
+
+/**
+ * The reasoning levels of a model, for `chat({ reasoning })`. A model name
+ * that this package does not list gets the common on/off toggle. `never`: a
+ * listed model that does not reason.
+ */
+type ResolveReasoning<TModel extends string> =
+  TModel extends keyof OllamaModelReasoningByName
+    ? OllamaModelReasoningByName[TModel]
+    : TModel extends keyof OllamaChatModelOptionsByName
+      ? never
+      : { levels: 'off' | 'high'; budget: false }
+
+/** The on/off toggle for a model name this package does not list. */
+const UNLISTED_MODEL_REASONING: ModelReasoning = {
+  levels: { off: 'false', high: 'true' },
+  budget: false,
+}
+
+const LISTED_MODELS: ReadonlySet<string> = new Set(OLLAMA_TEXT_MODELS)
+
+/**
+ * Ollama's `think` for `chat({ reasoning })`: `true` or `false` for a model
+ * with the on/off toggle, the level name for gpt-oss. A listed model with no
+ * reasoning data sends nothing.
+ */
+function ollamaThink(
+  request: ReasoningRequest | undefined,
+  model: string,
+): { think?: boolean | 'low' | 'medium' | 'high' } {
+  const reasoning =
+    OLLAMA_MODEL_REASONING[model] ??
+    (LISTED_MODELS.has(model) ? undefined : UNLISTED_MODEL_REASONING)
+  const value = resolveReasoning(request, reasoning)?.value
+  if (value === 'true' || value === 'false') return { think: value === 'true' }
+  if (value === 'low' || value === 'medium' || value === 'high') {
+    return { think: value }
+  }
+  return {}
+}
 
 export interface OllamaTextAdapterOptions {
   model?: OllamaTextModel
@@ -80,7 +128,11 @@ export class OllamaTextAdapter<TModel extends string> extends BaseTextAdapter<
   TModel,
   ResolveModelOptions<TModel>,
   OllamaInputModalities,
-  OllamaMessageMetadataByModality
+  OllamaMessageMetadataByModality,
+  ReadonlyArray<string>,
+  unknown,
+  never,
+  ResolveReasoning<TModel>
 > {
   override readonly kind = 'text' as const
   readonly name = 'ollama' as const
@@ -601,10 +653,10 @@ export class OllamaTextAdapter<TModel extends string> extends BaseTextAdapter<
       // object avoids aliasing the caller's modelOptions.options.
       options: { ...modelOptions?.options },
       // Request-level fields the nested modelOptions surface exposes
-      // (OllamaChatRequest): format / keep_alive / logprobs / top_logprobs, plus
-      // `think` for models whose options type includes OllamaChatRequestThinking.
+      // (OllamaChatRequest): format / keep_alive / logprobs / top_logprobs.
       // Read structurally and only forwarded when present. `stream` is set by
       // the call sites (chatStream / structuredOutput), so it is not forwarded.
+      // `think` comes from `chat({ reasoning })`.
       ...(modelOptions?.format !== undefined && {
         format: modelOptions.format,
       }),
@@ -617,11 +669,7 @@ export class OllamaTextAdapter<TModel extends string> extends BaseTextAdapter<
       ...(modelOptions?.top_logprobs !== undefined && {
         top_logprobs: modelOptions.top_logprobs,
       }),
-      ...(modelOptions &&
-      'think' in modelOptions &&
-      modelOptions.think !== undefined
-        ? { think: modelOptions.think }
-        : {}),
+      ...ollamaThink(options.reasoning, model),
       ...(convertedTools !== undefined && { tools: convertedTools }),
     }
   }

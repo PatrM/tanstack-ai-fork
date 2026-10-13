@@ -421,6 +421,23 @@ export type {
 // All types
 export * from './types'
 
+// One reasoning option for every provider: `chat({ reasoning })`.
+export {
+  REASONING_LEVELS,
+  clampReasoningLevel,
+  supportedReasoningLevels,
+} from './reasoning'
+export type {
+  AdapterReasoning,
+  ModelReasoning,
+  ReasoningCapability,
+  ReasoningLevel,
+  ReasoningLevels,
+  ReasoningOption,
+  ReasoningOptionFor,
+  ReasoningRequest,
+} from './reasoning'
+
 // Shared identity/isolation scope for the persistence + memory subsystems
 export type { Scope } from './scope'
 
@@ -562,6 +579,8 @@ export {
   getProviderExecutedMetadata,
   isProviderExecutedToolCall,
 } from './utilities/provider-executed'
+export { splitMidConversationChanges } from './utilities/mid-conversation'
+export type { MidConversationRequest } from './utilities/mid-conversation'
 export { orderedAssistantBlocks } from './utilities/block-order'
 export type { OrderedAssistantBlock } from './utilities/block-order'
 

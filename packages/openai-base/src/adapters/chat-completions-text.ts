@@ -7,6 +7,7 @@ import {
 import { BaseTextAdapter } from '@tanstack/ai/adapters'
 import {
   hashToolCallId,
+  resolveReasoning,
   toRunErrorPayload,
   toRetryAfterMs,
   toRunErrorRawEvent,
@@ -25,6 +26,7 @@ import type {
   StructuredOutputCompatibility,
 } from '../utils/schema-converter'
 import { buildChatCompletionsUsage } from '../usage'
+import { toChatCompletionsToolChoice } from '../tools/tool-choice'
 import { convertToolsToChatCompletionsFormat } from './chat-completions-tool-converter'
 import type OpenAI from 'openai'
 import type {
@@ -43,6 +45,8 @@ import type {
   Modality,
   ModelMessage,
   AdapterYieldChunk,
+  ModelReasoning,
+  ReasoningCapability,
   TextOptions,
 } from '@tanstack/ai'
 
@@ -66,12 +70,16 @@ export abstract class OpenAIBaseChatCompletionsTextAdapter<
   TMessageMetadata extends DefaultMessageMetadataByModality =
     DefaultMessageMetadataByModality,
   TToolCapabilities extends ReadonlyArray<string> = ReadonlyArray<string>,
+  TReasoning extends ReasoningCapability = never,
 > extends BaseTextAdapter<
   TModel,
   TProviderOptions,
   TInputModalities,
   TMessageMetadata,
-  TToolCapabilities
+  TToolCapabilities,
+  unknown,
+  never,
+  TReasoning
 > {
   override readonly kind = 'text' as const
   override readonly api: string = 'openai-completions'
@@ -1335,6 +1343,15 @@ export abstract class OpenAIBaseChatCompletionsTextAdapter<
   }
 
   /**
+   * The model's reasoning data for `chat({ reasoning })`. The default is
+   * none, so the base sends no reasoning field. A subclass returns the
+   * model's entry from the reasoning map in its `model-meta.ts`.
+   */
+  protected modelReasoning(_model: string): ModelReasoning | undefined {
+    return undefined
+  }
+
+  /**
    * Maps common TextOptions to Chat Completions API request format.
    * Override this in subclasses to add provider-specific options.
    */
@@ -1428,11 +1445,19 @@ export abstract class OpenAIBaseChatCompletionsTextAdapter<
         }
       : undefined
 
+    // `chat({ toolChoice })` is sent only when the request has tools. It goes
+    // before the `modelOptions` spread, so a `tool_choice` there wins.
+    const toolChoiceField =
+      tools?.length && options.toolChoice !== undefined
+        ? { tool_choice: toChatCompletionsToolChoice(options.toolChoice) }
+        : undefined
+
     // `modelOptions` is the sole sampling surface: callers set provider-native
     // wire names (`temperature`, `top_p`, `max_tokens`/`max_completion_tokens`)
     // there and they flow through the spread below. The root
     // `temperature`/`topP`/`maxTokens` fields are intentionally NOT read here.
-    return {
+    const params: ChatCompletionCreateParamsStreaming = {
+      ...toolChoiceField,
       ...modelOptions,
       model: options.model,
       messages,
@@ -1445,6 +1470,17 @@ export abstract class OpenAIBaseChatCompletionsTextAdapter<
       ...(responseFormat ?? {}),
       stream: true,
     }
+    // `chat({ reasoning })`: the model's effort for the level. The SDK type
+    // does not list every provider's effort values, so the field goes on
+    // with Object.assign.
+    const reasoning = resolveReasoning(
+      options.reasoning,
+      this.modelReasoning(options.model),
+    )
+    if (reasoning?.value) {
+      Object.assign(params, { reasoning_effort: reasoning.value })
+    }
+    return params
   }
 
   /**

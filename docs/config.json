@@ -175,6 +175,11 @@
           "updatedAt": "2026-10-09"
         },
         {
+          "label": "Reasoning",
+          "to": "chat/reasoning",
+          "addedAt": "2026-10-09"
+        },
+        {
           "label": "Message Queue",
           "to": "chat/queueing",
           "addedAt": "2026-08-26"
@@ -204,7 +209,8 @@
         {
           "label": "JSON",
           "to": "transports/json",
-          "addedAt": "2026-10-08"
+          "addedAt": "2026-10-08",
+          "updatedAt": "2026-10-12"
         },
         {
           "label": "WebSockets",
@@ -247,7 +253,7 @@
           "label": "One-Shot Extraction",
           "to": "structured-outputs/one-shot",
           "addedAt": "2026-05-19",
-          "updatedAt": "2026-09-25"
+          "updatedAt": "2026-10-12"
         },
         {
           "label": "Streaming UIs",
@@ -282,7 +288,7 @@
           "label": "Tools",
           "to": "tools/tools",
           "addedAt": "2026-04-15",
-          "updatedAt": "2026-09-30"
+          "updatedAt": "2026-10-09"
         },
         {
           "label": "Server Tools",
@@ -1178,6 +1184,16 @@
           "updatedAt": "2026-10-09"
         },
         {
+          "label": "Prompt Caching",
+          "to": "advanced/prompt-caching",
+          "addedAt": "2026-10-09"
+        },
+        {
+          "label": "Mid-Conversation Changes",
+          "to": "advanced/mid-conversation-changes",
+          "addedAt": "2026-10-09"
+        },
+        {
           "label": "Approval Flow Processing",
           "to": "architecture/approval-flow-processing",
           "addedAt": "2026-04-15",
@@ -1425,7 +1441,7 @@
           "label": "From Vercel AI SDK",
           "to": "migration/migration-from-vercel-ai",
           "addedAt": "2026-04-20",
-          "updatedAt": "2026-08-19"
+          "updatedAt": "2026-10-09"
         },
         {
           "label": "AG-UI Client Compliance",
@@ -1437,6 +1453,11 @@
           "label": "Sampling \u00e2\u2020\u2019 modelOptions",
           "to": "migration/sampling-options-to-model-options",
           "addedAt": "2026-06-03"
+        },
+        {
+          "label": "Reasoning option",
+          "to": "migration/reasoning-option",
+          "addedAt": "2026-10-09"
         },
         {
           "label": "TextPart markdown",
