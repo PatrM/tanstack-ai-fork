@@ -27,6 +27,7 @@ import { openRouterEffort } from '../internal/reasoning'
 import { addPromptCacheMarkers } from '../prompt-cache'
 import { convertToolsToProviderFormat } from '../tools'
 import { getOpenRouterApiKeyFromEnv } from '../utils'
+import { toOpenRouterRunErrorPayload } from '../utils/run-error'
 import { buildOpenRouterUsage } from '../usage'
 import { extractUsageCost } from './cost'
 import type { SDKOptions } from '@openrouter/sdk'
@@ -243,7 +244,7 @@ export class OpenRouterTextAdapter<
     } catch (error: unknown) {
       // Narrow before logging: raw SDK errors can carry request metadata
       // (including auth headers) which we must never surface to user loggers.
-      const errorPayload = toRunErrorPayload(
+      const errorPayload = toOpenRouterRunErrorPayload(
         error,
         `${this.name}.chatStream failed`,
       )
@@ -755,7 +756,7 @@ export class OpenRouterTextAdapter<
           : ''
       const isAbort =
         errName === 'AbortError' || errName === 'RequestAbortedError'
-      const errorPayload = toRunErrorPayload(
+      const errorPayload = toOpenRouterRunErrorPayload(
         error,
         `${this.name}.structuredOutputStream failed`,
       )
@@ -1347,7 +1348,7 @@ export class OpenRouterTextAdapter<
     } catch (error: unknown) {
       // Narrow before logging: raw SDK errors can carry request metadata
       // (including auth headers) which we must never surface to user loggers.
-      const errorPayload = toRunErrorPayload(
+      const errorPayload = toOpenRouterRunErrorPayload(
         error,
         `${this.name}.processStreamChunks failed`,
       )
@@ -1454,9 +1455,27 @@ export class OpenRouterTextAdapter<
         return id.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 40)
       },
     )
+    // Tool messages cannot carry images. The images of a run of tool results
+    // go in one user message after that run. Other media in a tool result is
+    // not sent.
+    const toolImages: Array<ChatContentItems> = []
     for (const m of replay.messages) {
+      if (m.role !== 'tool' && toolImages.length > 0)
+        messages.push({ role: 'user', content: toolImages.splice(0) })
       messages.push(this.convertMessage(m))
+      if (
+        m.role === 'tool' &&
+        Array.isArray(m.content) &&
+        (this.inputModalities?.includes('image') ?? true)
+      ) {
+        for (const part of m.content) {
+          const image = part.type === 'image' && this.convertContentPart(part)
+          if (image) toolImages.push(image)
+        }
+      }
     }
+    if (toolImages.length > 0)
+      messages.push({ role: 'user', content: toolImages })
 
     const tools = options.tools
       ? convertToolsToProviderFormat(options.tools)
@@ -1537,12 +1556,19 @@ export class OpenRouterTextAdapter<
       // ContentPart shape (e.g. `[{"type":"text","content":"…"}]`) into the
       // tool message's `content` field would feed the literal JSON of the
       // parts back to the model instead of the tool's textual result.
+      // `mapOptionsToRequest` sends the images in a user message after the
+      // tool results.
+      const text = this.extractTextContent(message.content)
       return {
         role: 'tool',
         content:
-          typeof message.content === 'string'
-            ? message.content
-            : this.extractTextContent(message.content),
+          !text &&
+          Array.isArray(message.content) &&
+          message.content.some((part) => part.type === 'image')
+            ? (this.inputModalities?.includes('image') ?? true)
+              ? '(see attached image)'
+              : '(image omitted: this model has no image input)'
+            : text,
         toolCallId: message.toolCallId || '',
       }
     }
