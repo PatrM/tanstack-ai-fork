@@ -55,6 +55,17 @@ export function mergeStoredMessages(
     if (!message) continue
     const id = message.id
     if (id && storedIds.has(id)) continue
+    // A resumed run posts stored tool results under the interrupt snapshot's
+    // ids, which the store never saw. Match tool results by toolCallId.
+    if (
+      message.role === 'tool' &&
+      prefix.some(
+        (stored) =>
+          stored.role === 'tool' && stored.toolCallId === message.toolCallId,
+      )
+    ) {
+      continue
+    }
     // Attach/reload can post the stored transcript again with no ids. Keep the
     // prefix row instead of appending a second copy of the same turn.
     if (!id) {
