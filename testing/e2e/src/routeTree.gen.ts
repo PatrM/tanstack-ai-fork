@@ -72,6 +72,7 @@ import { Route as ApiByteplusEncryptedReasoningWireRouteImport } from './routes/
 import { Route as ApiByteplusSeedance1080pWireRouteImport } from './routes/api.byteplus-seedance-1080p-wire'
 import { Route as ApiChatRouteImport } from './routes/api.chat'
 import { Route as ApiChatCompletionsIncompleteStreamRouteImport } from './routes/api.chat-completions-incomplete-stream'
+import { Route as ApiClientToolResumeStoreRouteImport } from './routes/api.client-tool-resume-store'
 import { Route as ApiCompactionWireRouteImport } from './routes/api.compaction-wire'
 import { Route as ApiContextOverflowRouteImport } from './routes/api.context-overflow'
 import { Route as ApiCrossModelReplayWireRouteImport } from './routes/api.cross-model-replay-wire'
@@ -499,6 +500,12 @@ const ApiChatCompletionsIncompleteStreamRoute =
   ApiChatCompletionsIncompleteStreamRouteImport.update({
     id: '/api/chat-completions-incomplete-stream',
     path: '/api/chat-completions-incomplete-stream',
+    getParentRoute: () => rootRouteImport,
+  } as any)
+const ApiClientToolResumeStoreRoute =
+  ApiClientToolResumeStoreRouteImport.update({
+    id: '/api/client-tool-resume-store',
+    path: '/api/client-tool-resume-store',
     getParentRoute: () => rootRouteImport,
   } as any)
 const ApiCompactionWireRoute = ApiCompactionWireRouteImport.update({
@@ -1077,6 +1084,7 @@ export interface FileRoutesByFullPath {
   '/api/byteplus-seedance-1080p-wire': typeof ApiByteplusSeedance1080pWireRoute
   '/api/chat': typeof ApiChatRoute
   '/api/chat-completions-incomplete-stream': typeof ApiChatCompletionsIncompleteStreamRoute
+  '/api/client-tool-resume-store': typeof ApiClientToolResumeStoreRoute
   '/api/compaction-wire': typeof ApiCompactionWireRoute
   '/api/context-overflow': typeof ApiContextOverflowRoute
   '/api/cross-model-replay-wire': typeof ApiCrossModelReplayWireRoute
@@ -1240,6 +1248,7 @@ export interface FileRoutesByTo {
   '/api/byteplus-seedance-1080p-wire': typeof ApiByteplusSeedance1080pWireRoute
   '/api/chat': typeof ApiChatRoute
   '/api/chat-completions-incomplete-stream': typeof ApiChatCompletionsIncompleteStreamRoute
+  '/api/client-tool-resume-store': typeof ApiClientToolResumeStoreRoute
   '/api/compaction-wire': typeof ApiCompactionWireRoute
   '/api/context-overflow': typeof ApiContextOverflowRoute
   '/api/cross-model-replay-wire': typeof ApiCrossModelReplayWireRoute
@@ -1404,6 +1413,7 @@ export interface FileRoutesById {
   '/api/byteplus-seedance-1080p-wire': typeof ApiByteplusSeedance1080pWireRoute
   '/api/chat': typeof ApiChatRoute
   '/api/chat-completions-incomplete-stream': typeof ApiChatCompletionsIncompleteStreamRoute
+  '/api/client-tool-resume-store': typeof ApiClientToolResumeStoreRoute
   '/api/compaction-wire': typeof ApiCompactionWireRoute
   '/api/context-overflow': typeof ApiContextOverflowRoute
   '/api/cross-model-replay-wire': typeof ApiCrossModelReplayWireRoute
@@ -1569,6 +1579,7 @@ export interface FileRouteTypes {
     | '/api/byteplus-seedance-1080p-wire'
     | '/api/chat'
     | '/api/chat-completions-incomplete-stream'
+    | '/api/client-tool-resume-store'
     | '/api/compaction-wire'
     | '/api/context-overflow'
     | '/api/cross-model-replay-wire'
@@ -1732,6 +1743,7 @@ export interface FileRouteTypes {
     | '/api/byteplus-seedance-1080p-wire'
     | '/api/chat'
     | '/api/chat-completions-incomplete-stream'
+    | '/api/client-tool-resume-store'
     | '/api/compaction-wire'
     | '/api/context-overflow'
     | '/api/cross-model-replay-wire'
@@ -1895,6 +1907,7 @@ export interface FileRouteTypes {
     | '/api/byteplus-seedance-1080p-wire'
     | '/api/chat'
     | '/api/chat-completions-incomplete-stream'
+    | '/api/client-tool-resume-store'
     | '/api/compaction-wire'
     | '/api/context-overflow'
     | '/api/cross-model-replay-wire'
@@ -2059,6 +2072,7 @@ export interface RootRouteChildren {
   ApiByteplusSeedance1080pWireRoute: typeof ApiByteplusSeedance1080pWireRoute
   ApiChatRoute: typeof ApiChatRoute
   ApiChatCompletionsIncompleteStreamRoute: typeof ApiChatCompletionsIncompleteStreamRoute
+  ApiClientToolResumeStoreRoute: typeof ApiClientToolResumeStoreRoute
   ApiCompactionWireRoute: typeof ApiCompactionWireRoute
   ApiContextOverflowRoute: typeof ApiContextOverflowRoute
   ApiCrossModelReplayWireRoute: typeof ApiCrossModelReplayWireRoute
@@ -2596,6 +2610,13 @@ declare module '@tanstack/react-router' {
       path: '/api/chat-completions-incomplete-stream'
       fullPath: '/api/chat-completions-incomplete-stream'
       preLoaderRoute: typeof ApiChatCompletionsIncompleteStreamRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/client-tool-resume-store': {
+      id: '/api/client-tool-resume-store'
+      path: '/api/client-tool-resume-store'
+      fullPath: '/api/client-tool-resume-store'
+      preLoaderRoute: typeof ApiClientToolResumeStoreRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/compaction-wire': {
@@ -3412,6 +3433,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiChatRoute: ApiChatRoute,
   ApiChatCompletionsIncompleteStreamRoute:
     ApiChatCompletionsIncompleteStreamRoute,
+  ApiClientToolResumeStoreRoute: ApiClientToolResumeStoreRoute,
   ApiCompactionWireRoute: ApiCompactionWireRoute,
   ApiContextOverflowRoute: ApiContextOverflowRoute,
   ApiCrossModelReplayWireRoute: ApiCrossModelReplayWireRoute,
