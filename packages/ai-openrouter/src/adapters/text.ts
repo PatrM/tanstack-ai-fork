@@ -914,10 +914,12 @@ export class OpenRouterTextAdapter<
           // sent in-band is already stripped here — only pre-stream HTTP errors
           // (caught in the outer catch) retain `error.metadata` via their typed
           // error class's `.error` body.
+          //
           // OpenRouter sent status 200 before the provider failed, so the SDK
           // cannot retry this and there is no `Retry-After`. For a code the SDK
-          // would retry (`retryCodes`, default `5XX`), wait its backoff
-          // `initialInterval`, so `chat({ retry })` can call the model again.
+          // would retry (`retryCodes`, default `5XX`), set `retryAfterMs` to
+          // its backoff `initialInterval` (default 500), so `chat({ retry })`
+          // can call the model again.
           const status = String(chunk.error.code)
           const retryConfig = this.sdkOptions.retryConfig
           if (

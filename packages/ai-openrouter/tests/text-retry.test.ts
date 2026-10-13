@@ -1,7 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { chat } from '@tanstack/ai'
 import { resolveDebugOption } from '@tanstack/ai/adapter-internals'
+import { HTTPClient } from '@openrouter/sdk'
 import { createOpenRouterText } from '../src/adapters/text'
-import type { OpenRouterTextAdapter } from '../src/adapters/text'
+import type { StreamChunk } from '@tanstack/ai'
+import type {
+  OpenRouterTextAdapter,
+  OpenRouterConfig,
+} from '../src/adapters/text'
 
 // Drive the REAL @openrouter/sdk retry loop against a stubbed fetch, so the
 // test proves a configured `retryCodes` actually changes SDK behaviour rather
@@ -100,46 +106,74 @@ describe('OpenRouter text adapter retryCodes', () => {
   })
 })
 
-// OpenRouter sends status 200 when the provider accepts the request. A
-// provider error after that arrives as an error chunk in the stream.
-const rateLimitedChunk = () =>
+// OpenRouter can send status 200 before the provider fails. The provider
+// error then arrives as an error chunk in the stream.
+const sse = (chunk: object) =>
   new Response(
     `data: ${JSON.stringify({
       id: 'gen-1',
       object: 'chat.completion.chunk',
       created: 0,
       model: 'openai/gpt-4o-mini',
-      error: { code: 429, message: 'Rate limited upstream' },
-      choices: [{ index: 0, delta: { content: '' }, finish_reason: 'error' }],
+      ...chunk,
     })}\n\ndata: [DONE]\n\n`,
     { status: 200, headers: { 'content-type': 'text/event-stream' } },
   )
 
-async function runError(retryCodes?: Array<string>) {
-  fetchMock.mockResolvedValueOnce(rateLimitedChunk())
+// Sends an error chunk with `code` on the first call, then text.
+async function runChat(
+  code: number,
+  config: Omit<OpenRouterConfig, 'apiKey'> = {},
+) {
+  let calls = 0
+  const httpClient = new HTTPClient({
+    fetcher: async () =>
+      calls++ === 0
+        ? sse({ error: { code, message: 'Provider failed' }, choices: [] })
+        : sse({
+            choices: [
+              { index: 0, delta: { content: 'hello' }, finish_reason: 'stop' },
+            ],
+          }),
+  })
   const adapter = createOpenRouterText('openai/gpt-4o-mini', 'sk-or-test', {
     retryConfig,
-    ...(retryCodes && { retryCodes }),
+    ...config,
+    httpClient,
   })
-  for await (const event of adapter.chatStream({
-    model: 'openai/gpt-4o-mini',
+  const events: Array<StreamChunk> = []
+  for await (const event of chat({
+    adapter,
     messages: [{ role: 'user', content: 'Hello' }],
-    logger: testLogger,
+    retry: { maxRetries: 1 },
   })) {
-    if (event.type === 'RUN_ERROR') return event
+    events.push(event)
   }
-  throw new Error('no RUN_ERROR')
+  return { calls, error: events.find((e) => e.type === 'RUN_ERROR') }
 }
 
-describe('OpenRouter text adapter retryAfterMs', () => {
-  it('waits the backoff interval after an error chunk with a retried code', async () => {
-    const event = await runError(['429', '5XX'])
-    expect(event).toMatchObject({ code: '429', retryAfterMs: 1 })
+describe('OpenRouter text adapter error chunk in the stream', () => {
+  it('retries a code in retryCodes with chat({ retry })', async () => {
+    expect(await runChat(429, { retryCodes: ['429'] })).toEqual({
+      calls: 2,
+      error: undefined,
+    })
   })
 
-  it('sets no wait for an error chunk the SDK would not retry', async () => {
-    const event = await runError()
-    expect(event.code).toBe('429')
-    expect(event.retryAfterMs).toBeUndefined()
+  it('retries a 5xx code by default', async () => {
+    expect(await runChat(503)).toEqual({ calls: 2, error: undefined })
+  })
+
+  it('does not retry a 429 by default', async () => {
+    const { calls, error } = await runChat(429)
+    expect(calls).toBe(1)
+    expect(error).toMatchObject({ code: '429' })
+  })
+
+  it('does not retry when the retry strategy is none', async () => {
+    const { calls } = await runChat(503, {
+      retryConfig: { strategy: 'none' },
+    })
+    expect(calls).toBe(1)
   })
 })
