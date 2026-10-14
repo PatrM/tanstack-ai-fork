@@ -166,7 +166,7 @@
           "label": "Agentic Cycle",
           "to": "chat/agentic-cycle",
           "addedAt": "2026-04-15",
-          "updatedAt": "2026-07-21"
+          "updatedAt": "2026-10-13"
         },
         {
           "label": "Thinking & Reasoning",
@@ -353,7 +353,7 @@
           "label": "Middleware",
           "to": "advanced/middleware",
           "addedAt": "2026-04-15",
-          "updatedAt": "2026-10-12"
+          "updatedAt": "2026-10-13"
         },
         {
           "label": "Built-in Middleware",
@@ -1129,7 +1129,7 @@
           "label": "Bring Your Own Key",
           "to": "advanced/byok",
           "addedAt": "2026-08-18",
-          "updatedAt": "2026-10-09"
+          "updatedAt": "2026-10-13"
         },
         {
           "label": "Debug Logging",
@@ -1479,7 +1479,7 @@
           "label": "@tanstack/ai",
           "to": "api/ai",
           "addedAt": "2026-04-15",
-          "updatedAt": "2026-10-08"
+          "updatedAt": "2026-10-13"
         },
         {
           "label": "@tanstack/ai-client",

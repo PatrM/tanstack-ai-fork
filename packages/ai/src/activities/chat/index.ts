@@ -62,7 +62,9 @@ import { transformMessagesForReplay } from '../../utilities/replay-messages'
 import { LazyToolManager } from './tools/lazy-tool-manager'
 import { assertUniqueToolNames } from './tools/unique-tool-names'
 import type { DefinedAgent } from './agents/define-agent'
+import { providerKeys } from '../../byok/env-keys'
 import {
+  assertNoReservedFields,
   collectNamedText,
   createSubagentSink,
   createSyntheticSubagentTools,
@@ -96,7 +98,11 @@ import {
   hashSchemaInput,
   normalizeApprovalSchema,
 } from './tools/approval-schema'
-import { maxIterations as maxIterationsStrategy } from './agent-loop-strategies'
+import {
+  combineStrategies,
+  maxIterations as maxIterationsStrategy,
+  untilFinishReason,
+} from './agent-loop-strategies'
 import { isCancelRequestedReason } from './cancel'
 import {
   applyActivityDeltaToRecords,
@@ -114,6 +120,7 @@ import {
 } from './messages'
 import { MiddlewareRunner } from './middleware/compose'
 import { getRunDetached } from './middleware/run-store'
+import { LoadChildCapability } from './middleware/load-child'
 import { publishRunDetachedSignal } from '../../delivery-detach'
 import { publishRunDisconnectHandler } from '../../delivery-disconnect'
 import { provideSandboxRuntime } from './middleware/sandbox-runtime'
@@ -159,6 +166,7 @@ import type {
   PromptCacheOptions,
   ProviderTool,
   ResolvedPromptCache,
+  RunErrorEvent,
   RunFinishedEvent,
   SchemaInput,
   StreamChunk,
@@ -234,6 +242,14 @@ function turnBlockOrder(
   return buildBlockOrder(entries)
 }
 
+/**
+ * The tool result of a call in an answer cut at the output limit. Middleware
+ * `onAfterToolCall` can replace it: the error of such a call has the code
+ * `'max_tokens'`.
+ */
+const TRUNCATED_TOOL_RESULT =
+  'The answer stopped at the output limit, so no tool call in it ran. Send the tool calls again. Do not repeat text you already wrote. If one call has a large input, split the work into smaller calls.'
+
 // ===========================
 // Activity Kind
 // ===========================
@@ -246,6 +262,9 @@ type RuntimeToolWithApproval = AnyRuntimeTool & {
   approvalSchema?: ApprovalSchemaConfig
 }
 const interruptBindingMetadataKey = INTERRUPT_BINDING_METADATA_KEY
+
+/** Most `ctx.retry()` calls kept for one model call. */
+const MAX_MODEL_ERROR_RETRIES = 2
 
 /** Resume entries a subagent tool call owns. The parent run skips them. */
 const CHILD_RESUME_IDS = Symbol('tanstack.ai.childResumeIds')
@@ -587,7 +606,12 @@ export interface TextActivityOptions<
   reasoning?: ReasoningOptionFor<AdapterReasoning<TAdapter>>
   /** AbortController for cancellation */
   abortController?: TextOptions['abortController']
-  /** Strategy for controlling the agent loop */
+  /**
+   * Strategy for controlling the agent loop. Default:
+   * `combineStrategies([maxIterations(5), untilFinishReason(['length'])])`.
+   * A strategy that goes on after a `length` answer makes the model send the
+   * cut tool calls of that answer again.
+   */
   agentLoopStrategy?: TextOptions['agentLoopStrategy']
   /** How the server tools of one model turn run. Default `'parallel'`. */
   toolExecution?: TextOptions['toolExecution']
@@ -652,6 +676,10 @@ export interface TextActivityOptions<
   parentRunId?: TextOptions['parentRunId']
   /** Subagent run id when this chat runs as a child. See `defineAgent`. */
   subagentRunId?: TextOptions['subagentRunId']
+  /** The agent name when this chat runs as a subagent. Middleware reads `ctx.subagentName`. */
+  subagentName?: TextOptions['subagentName']
+  /** The subagentRunId of the child that started this one, for a nested child. */
+  parentSubagentRunId?: TextOptions['parentSubagentRunId']
   /** Application state mirrored in a STATE_SNAPSHOT before an interrupt terminal. */
   state?: TextOptions['state']
   /**
@@ -984,6 +1012,8 @@ class TextEngine<
   /** Tool call IDs already counted toward `toolCallCount` (avoids double-count on resume). */
   private readonly countedToolCallIds = new Set<string>()
   private lastFinishReason: string | null = null
+  /** The loop decision of a cut answer, from its tool phase (processToolCalls). */
+  private cutAnswerContinues: boolean | undefined
   private streamStartTime = 0
   private totalChunkCount = 0
   private currentMessageId: string | null = null
@@ -1014,6 +1044,12 @@ class TextEngine<
   private currentCallMetadata: TanStackMessageMetadata = {}
   /** An abort ended the wait of `retryRateLimited`. Its last chunks still go to the caller. */
   private retryAbandoned = false
+  /** `onModelError` is running, so `ctx.retry()` is allowed. */
+  private inModelErrorHook = false
+  /** A middleware called `ctx.retry()` for the current model call. */
+  private retryModelCall = false
+  /** `ctx.retry()` calls kept for the current model call. */
+  private modelErrorRetries = 0
   private structuredCallMetadata: TanStackMessageMetadata = {}
   private eventToolNames?: Array<string>
   private finishedEvent: RunFinishedEvent | null = null
@@ -1142,7 +1178,11 @@ class TextEngine<
     }
     this.systemPrompts = config.params.systemPrompts || []
     this.loopStrategy =
-      config.params.agentLoopStrategy || maxIterationsStrategy(5)
+      config.params.agentLoopStrategy ||
+      combineStrategies([
+        maxIterationsStrategy(5),
+        untilFinishReason(['length']),
+      ])
     this.initialMessageCount = config.params.messages.length
 
     // Extract client state (approvals, client tool results) from original messages BEFORE conversion
@@ -1207,6 +1247,8 @@ class TextEngine<
       runId: this.runIdOverride ?? this.requestId,
       parentRunId: this.parentRunIdOverride,
       subagentRunId: this.subagentRunIdOverride,
+      subagentName: config.params.subagentName,
+      parentSubagentRunId: config.params.parentSubagentRunId,
       threadId: this.threadId,
       // Legacy alias kept on the ctx so middleware that reads
       // `ctx.conversationId` keeps working. Always equals `threadId`.
@@ -1218,6 +1260,12 @@ class TextEngine<
       abort: (reason?: string) => {
         this.abortReason = reason
         this.middlewareAbortController?.abort(reason)
+      },
+      retry: () => {
+        if (!this.inModelErrorHook) {
+          throw new Error('ctx.retry() works only in onModelError.')
+        }
+        this.retryModelCall = true
       },
       emitCustomEvent: (name, value, options) => {
         this.middlewareCustomQueue.push(
@@ -1475,26 +1523,34 @@ class TextEngine<
           yield* this.runWhileYielding(this.beginCycle())
 
           if (this.cyclePhase === 'processText') {
-            // Run onConfig before each model call (phase = beforeModel)
-            this.middlewareCtx.phase = 'beforeModel'
-            this.middlewareCtx.iteration = this.iterationCount
-            const iterConfig = this.buildMiddlewareConfig()
-            const iterTransformedConfig = yield* this.runWhileYielding(
-              this.middlewareRunner.runOnConfig(this.middlewareCtx, iterConfig),
-            )
-            this.applyMiddlewareConfig(iterTransformedConfig)
-
-            if (
-              yield* this.emitBoundaryInterrupts(
-                'beforeModel',
-                this.createSyntheticFinishedEvent(),
+            this.modelErrorRetries = 0
+            // A `ctx.retry()` in onModelError runs this again.
+            do {
+              this.retryModelCall = false
+              // Run onConfig before each model call (phase = beforeModel)
+              this.middlewareCtx.phase = 'beforeModel'
+              this.middlewareCtx.iteration = this.iterationCount
+              const iterConfig = this.buildMiddlewareConfig()
+              const iterTransformedConfig = yield* this.runWhileYielding(
+                this.middlewareRunner.runOnConfig(
+                  this.middlewareCtx,
+                  iterConfig,
+                ),
               )
-            ) {
-              this.setToolPhase('wait')
-              return
-            }
+              this.applyMiddlewareConfig(iterTransformedConfig)
 
-            yield* this.streamModelResponse()
+              if (
+                yield* this.emitBoundaryInterrupts(
+                  'beforeModel',
+                  this.createSyntheticFinishedEvent(),
+                )
+              ) {
+                this.setToolPhase('wait')
+                return
+              }
+
+              yield* this.streamModelResponse()
+            } while (this.retryModelCall && !this.isCancelled())
 
             if (this.earlyTermination) break
 
@@ -1709,20 +1765,26 @@ class TextEngine<
    * retried, so no output repeats. `RUN_STARTED` is held until the attempt is
    * kept, so the public start has the same `runId` as the `RUN_FINISHED` of
    * the kept attempt. When an abort ends the wait, the held error is yielded.
+   *
+   * Any other error before output goes to `onModelError`. When a middleware
+   * calls `ctx.retry()`, this returns without the error, and the agent loop
+   * runs `onConfig` and calls the model again.
    */
   private async *retryRateLimited(
     call: () => AsyncIterable<AdapterYieldChunk>,
   ): AsyncGenerator<AdapterYieldChunk> {
     const retry = this.params.retry
-    if (!retry) {
+    const hasModelErrorHook = this.middlewareRunner.hasModelErrorHook
+    if (!retry && !hasModelErrorHook) {
       yield* call()
       return
     }
-    const maxWaitMs = retry.maxWaitMs ?? 60_000
+    const maxWaitMs = retry?.maxWaitMs ?? 60_000
     if (
-      !Number.isInteger(retry.maxRetries) ||
-      retry.maxRetries < 0 ||
-      !(maxWaitMs >= 0)
+      retry &&
+      (!Number.isInteger(retry.maxRetries) ||
+        retry.maxRetries < 0 ||
+        !(maxWaitMs >= 0))
     ) {
       throw new TypeError(
         'chat() retry: maxRetries must be an integer of 0 or more, and maxWaitMs must be 0 or more.',
@@ -1734,17 +1796,21 @@ class TextEngine<
       let waitMs: number | undefined
       let rateLimitError: AdapterYieldChunk | undefined
       for await (const chunk of call()) {
-        if (
-          chunk.type === EventType.RUN_ERROR &&
-          !streamed &&
-          attempt <= retry.maxRetries &&
-          chunk.retryAfterMs !== undefined &&
-          chunk.retryAfterMs <= maxWaitMs
-        ) {
-          // Wait after the loop, so the adapter stream closes first.
-          waitMs = chunk.retryAfterMs
-          rateLimitError = chunk
-          break
+        if (chunk.type === EventType.RUN_ERROR && !streamed) {
+          if (
+            retry &&
+            attempt <= retry.maxRetries &&
+            chunk.retryAfterMs !== undefined &&
+            chunk.retryAfterMs <= maxWaitMs
+          ) {
+            // Wait after the loop, so the adapter stream closes first.
+            waitMs = chunk.retryAfterMs
+            rateLimitError = chunk
+            break
+          }
+          if (hasModelErrorHook && (await this.modelErrorRetried(chunk))) {
+            return
+          }
         }
         if (chunk.type === EventType.RUN_STARTED && !streamed) {
           start = chunk
@@ -1757,7 +1823,7 @@ class TextEngine<
       }
       if (waitMs === undefined || !rateLimitError) break
       this.logger.warn(
-        `activity=chat provider asked to wait, retry ${attempt} of ${retry.maxRetries} in ${waitMs}ms`,
+        `activity=chat provider asked to wait, retry ${attempt} of ${retry?.maxRetries} in ${waitMs}ms`,
         { attempt, waitMs, model: this.params.model },
       )
       // Also wakes on a middleware `ctx.abort()`, not only the caller's.
@@ -1770,6 +1836,29 @@ class TextEngine<
       }
     }
     if (start) yield start
+  }
+
+  /**
+   * Runs `onModelError`. True when a middleware called `ctx.retry()` and the
+   * model call has retries left. The hook also runs when none are left.
+   */
+  private async modelErrorRetried(error: RunErrorEvent): Promise<boolean> {
+    if (this.isCancelled()) return false
+    this.retryModelCall = false
+    this.inModelErrorHook = true
+    try {
+      await this.middlewareRunner.runOnModelError(this.middlewareCtx, error)
+    } finally {
+      this.inModelErrorHook = false
+    }
+    this.retryModelCall &&= this.modelErrorRetries < MAX_MODEL_ERROR_RETRIES
+    if (!this.retryModelCall) return false
+    this.modelErrorRetries++
+    this.logger.warn(
+      `activity=chat middleware asked to call the model again, retry ${this.modelErrorRetries} of ${MAX_MODEL_ERROR_RETRIES}`,
+      { code: error.code, model: this.params.model },
+    )
+    return true
   }
 
   private async *streamModelResponse(): AsyncGenerator<StreamChunk> {
@@ -2147,8 +2236,10 @@ class TextEngine<
     if (chunk.type === EventType.RUN_FINISHED) {
       const model = chunk.model ?? incoming?.model
       const responseId = chunk.responseId ?? incoming?.responseId
+      const finishReason = chunk.finishReason ?? incoming?.finishReason
       if (model !== undefined) metadata.model = model
       if (responseId !== undefined) metadata.responseId = responseId
+      if (finishReason) metadata.finishReason = finishReason
       if (incoming?.responseItems !== undefined)
         metadata.responseItems = incoming.responseItems
     }
@@ -2638,6 +2729,83 @@ class TextEngine<
 
     this.addAssistantToolCallMessage(toolCalls)
 
+    // The output limit cut this answer. Each call that the provider did not
+    // run has its error result now (closeTruncatedToolCalls). No call runs.
+    if (this.lastFinishReason === 'length') {
+      const results: Array<ToolResult> = []
+      for (const call of toolCalls) {
+        const stored = this.messages.find(
+          (message) =>
+            message.role === 'tool' && message.toolCallId === call.id,
+        )
+        if (!stored) continue
+        // onAfterToolCall can replace the text. The code tells this error
+        // apart from a failed run.
+        const decision = yield* this.runWhileYielding(
+          this.middlewareRunner.runOnAfterToolCall(this.middlewareCtx, {
+            toolCall: call,
+            tool: this.tools.find((tool) => tool.name === call.function.name),
+            toolName: call.function.name,
+            toolCallId: call.id,
+            ok: false,
+            duration: 0,
+            error: Object.assign(new Error(TRUNCATED_TOOL_RESULT), {
+              code: 'max_tokens',
+            }),
+          }),
+        )
+        results.push({
+          toolCallId: call.id,
+          toolName: call.function.name,
+          result: decision ? decision.result : stored.content,
+          state: 'output-error',
+        })
+      }
+      // This also stores the results, so the loop decision reads them.
+      const resultChunks = this.buildToolResultChunks(
+        results,
+        finishEvent,
+        undefined,
+        true,
+      )
+      // Ask the strategy and middleware now, with the state that
+      // shouldContinue() gives them after this cycle. shouldContinue() then
+      // uses this answer. The RUN_FINISHED that the client sees depends on it.
+      const continues = yield* this.runWhileYielding(
+        this.loopContinues(this.iterationCount + 1),
+      )
+      this.cutAnswerContinues = continues
+      if (continues) {
+        // A client reads it as a tool turn, so it waits for the next call.
+        // The chunks are already public, so the finish reason is in the
+        // metadata.
+        this.deferredToolCallRunFinishedChunks =
+          this.deferredToolCallRunFinishedChunks.map((chunk) =>
+            chunk.type === EventType.RUN_FINISHED
+              ? withTanstackMetadata(chunk, { finishReason: 'tool_calls' })
+              : chunk,
+          )
+        yield* this.flushDeferredToolCallRunFinishedChunks()
+      }
+      for (const chunk of resultChunks) {
+        yield* this.pipeThroughMiddleware(chunk)
+      }
+      // A stopped run ends on the `length` RUN_FINISHED, after the results.
+      // Native combined structured output sends it after its harvest, and
+      // drops it when the harvest fails.
+      if (!continues && this.finalStructuredOutput?.nativeCombined) {
+        this.deferredModelRunFinishedChunks.push(
+          ...this.deferredToolCallRunFinishedChunks,
+        )
+        this.deferredToolCallRunFinishedChunks = []
+      } else if (!continues) {
+        yield* this.flushDeferredToolCallRunFinishedChunks()
+      }
+      this.toolCallManager.clear()
+      this.setToolPhase(continues ? 'continue' : 'stop')
+      return
+    }
+
     // Handle undiscovered lazy tool calls with self-correcting error messages
     const undiscoveredLazyResults: Array<ToolResult> = []
     const executableToolCalls = toolCalls.filter((tc) => {
@@ -2905,7 +3073,13 @@ class TextEngine<
 
   private shouldExecuteToolPhase(): boolean {
     return (
-      this.lastFinishReason === 'tool_calls' &&
+      (this.lastFinishReason === 'tool_calls' ||
+        (this.lastFinishReason === 'length' &&
+          // Provider-executed calls have their results. With no other call,
+          // the cut answer ends the run like a text answer.
+          this.toolCallManager
+            .getToolCalls()
+            .some((call) => !isProviderExecutedToolCall(call)))) &&
       this.tools.length > 0 &&
       this.toolCallManager.hasToolCalls()
     )
@@ -3054,8 +3228,38 @@ class TextEngine<
         },
       ]),
     ]
+    this.closeTruncatedToolCalls(from)
     this.saveMidConversationChange(from)
     this.middlewareCtx.messages = this.messages
+  }
+
+  /**
+   * Give each call of the assistant messages from index `from` an error result
+   * when the output limit cut their answer. Such a call is not complete, so it
+   * never runs and asks for nothing. A provider-executed call has its result.
+   */
+  private closeTruncatedToolCalls(from: number): void {
+    const cut = this.messages
+      .slice(from)
+      .flatMap((message) =>
+        tanstackMetadata(message)?.finishReason === 'length'
+          ? (message.toolCalls ?? []).filter(
+              (call) => !isProviderExecutedToolCall(call),
+            )
+          : [],
+      )
+    if (cut.length === 0) return
+    this.messages = [
+      ...this.messages,
+      ...cut.map(
+        (call): ModelMessage => ({
+          role: 'tool',
+          toolCallId: call.id,
+          content: TRUNCATED_TOOL_RESULT,
+          error: TRUNCATED_TOOL_RESULT,
+        }),
+      ),
+    ]
   }
 
   private addTerminalAssistantMessages(): void {
@@ -3182,6 +3386,7 @@ class TextEngine<
     }
 
     this.messages = messages
+    this.closeTruncatedToolCalls(startedLength)
     // An in-place update does not grow the array. The assistant message is
     // already at existingStructuredIndex, so a search from the old length
     // misses it and leaves the record pending.
@@ -3834,6 +4039,7 @@ class TextEngine<
     results: Array<ToolResult>,
     _finishEvent: RunFinishedEvent,
     argsMap?: Map<string, string>,
+    replaceExisting = false,
   ): Array<AdapterYieldChunk> {
     const chunks: Array<AdapterYieldChunk> = []
 
@@ -3915,17 +4121,19 @@ class TextEngine<
         }
       })
       const isDeniedResult = result.outcome === 'denied'
-      const existingToolResultIdx = isDeniedResult
-        ? this.messages.findIndex(
-            (message) =>
-              message.role === 'tool' &&
-              message.toolCallId === result.toolCallId,
-          )
-        : -1
+      const existingToolResultIdx =
+        isDeniedResult || replaceExisting
+          ? this.messages.findIndex(
+              (message) =>
+                message.role === 'tool' &&
+                message.toolCallId === result.toolCallId,
+            )
+          : -1
       const resultMessageIdx =
         existingToolResultIdx >= 0 ? existingToolResultIdx : placeholderIdx
 
-      // Only a denied result keeps the old message's fields. A replaced
+      // Only a denied result or `replaceExisting` (the cut calls of an answer
+      // at the output limit) keeps the old message's fields. A replaced
       // pendingExecution placeholder must not leak into the real result.
       const existingToolMessage =
         existingToolResultIdx >= 0
@@ -4044,8 +4252,15 @@ class TextEngine<
 
     for (const message of this.messages) {
       if (message.role === 'assistant' && message.toolCalls) {
-        const stopReason = tanstackMetadata(message)?.stopReason
-        if (stopReason === 'error' || stopReason === 'aborted') continue
+        const metadata = tanstackMetadata(message)
+        // The calls of a failed answer, or of an answer that the output limit
+        // cut, are not complete. They never run.
+        if (
+          metadata?.stopReason === 'error' ||
+          metadata?.stopReason === 'aborted' ||
+          metadata?.finishReason === 'length'
+        )
+          continue
         for (const toolCall of message.toolCalls) {
           // Provider-executed tool calls (e.g. Anthropic `web_search`) were
           // already run by the provider; they carry no client result, so they
@@ -4141,8 +4356,20 @@ class TextEngine<
       return true
     }
 
+    // The tool phase of a cut answer asked already.
+    const cutAnswerContinues = this.cutAnswerContinues
+    this.cutAnswerContinues = undefined
+
+    return (
+      (cutAnswerContinues ?? (await this.loopContinues(this.iterationCount))) &&
+      this.toolPhase === 'continue'
+    )
+  }
+
+  /** Ask the loop strategy and middleware `onShouldContinue`. */
+  private async loopContinues(iterationCount: number): Promise<boolean> {
     const state = {
-      iterationCount: this.iterationCount,
+      iterationCount,
       messages: this.messages,
       finishReason: this.lastFinishReason,
       toolCallCount: this.toolCallCount,
@@ -4151,16 +4378,13 @@ class TextEngine<
 
     // Evaluate strategy and middleware unconditionally (even when the
     // strategy already says stop) so every onShouldContinue observer still
-    // sees the final counters; AND all three at the end.
+    // sees the final counters.
     const strategyContinues = this.loopStrategy(state)
     const middlewareContinues = await this.middlewareRunner.runOnShouldContinue(
       this.middlewareCtx,
       state,
     )
-
-    return (
-      strategyContinues && middlewareContinues && this.toolPhase === 'continue'
-    )
+    return strategyContinues && middlewareContinues
   }
 
   /**
@@ -5647,6 +5871,12 @@ export function chat<
   if (options.tools) {
     assertUniqueToolNames(options.tools)
   }
+  if (options.subagents) {
+    assertNoReservedFields(
+      options.subagents,
+      continuesChildren(readRuntimeMiddleware(options.middleware)),
+    )
+  }
 
   const { outputSchema, stream } = options
 
@@ -5898,10 +6128,28 @@ async function* streamTextChunks(
   options: RuntimeTextActivityOptions<AnyTextAdapter, undefined, boolean>,
   engineRef: DeliveryEngineRef,
 ): AsyncIterable<StreamChunk> {
-  const bag = options.subagents
+  // Children inherit the retention of this call. Their key is their own
+  // threadId. The keys of this call win over the keys of a parent agent,
+  // one provider at a time.
+  const bag = options.subagents && {
+    ...options.subagents,
+    binding: {
+      ...options.subagents.binding,
+      ...(options.subagents.keys
+        ? {
+            keys: providerKeys(
+              options.subagents.keys,
+              options.subagents.binding?.keys,
+            ),
+          }
+        : {}),
+      promptCache:
+        options.subagents.binding?.promptCache ?? options.promptCache.retention,
+    },
+  }
   const agents = bag?.agents ?? []
   if (bag && agents.length > 0 && bag.router) {
-    yield* runRoutedSubagents(options, engineRef)
+    yield* runRoutedSubagents({ ...options, subagents: bag }, engineRef)
     return
   }
   if (bag && agents.length > 0) {
@@ -5918,10 +6166,15 @@ async function* streamTextChunks(
     const synthetic = createSyntheticSubagentTools(bag, {
       messages: turn?.before ?? messages,
       messagesFor: calls.messagesFor,
+      childLoader: calls.childLoader,
+      canContinue: continuesChildren(options.middleware),
       threadId,
       runId,
       ...(options.parentRunId !== undefined && {
         interruptedRunId: options.parentRunId,
+      }),
+      ...(options.subagentRunId !== undefined && {
+        parentSubagentRunId: options.subagentRunId,
       }),
       ...(options.abortController && {
         abortSignal: options.abortController.signal,
@@ -6099,6 +6352,9 @@ async function* runRoutedSubagents(
             parentRunId: runId,
             ...(options.parentRunId !== undefined && {
               interruptedRunId: options.parentRunId,
+            }),
+            ...(options.subagentRunId !== undefined && {
+              parentSubagentRunId: options.subagentRunId,
             }),
           },
           sink,
@@ -6348,6 +6604,15 @@ function withPlan(chunk: StreamChunk, plan: RoutedPlan): StreamChunk {
     ...(order !== undefined && { order }),
   }))
   return withTanstackMetadata(chunk, { [SUBAGENT_PLAN_KEY]: { steps } })
+}
+
+/** A middleware provides `loadChild`, so agent tools take `sessionId`. */
+function continuesChildren(
+  middleware: ReadonlyArray<{ provides?: ReadonlyArray<unknown> }> | undefined,
+) {
+  return (middleware ?? []).some((item) =>
+    item.provides?.includes(LoadChildCapability),
+  )
 }
 
 function readRoutedSubagentPersistence(

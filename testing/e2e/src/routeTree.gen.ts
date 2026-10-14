@@ -67,6 +67,7 @@ import { Route as ApiArktypeToolWireRouteImport } from './routes/api.arktype-too
 import { Route as ApiAudioRouteImport } from './routes/api.audio'
 import { Route as ApiAzureOpenaiWireRouteImport } from './routes/api.azure-openai-wire'
 import { Route as ApiBedrockConverseCacheRouteImport } from './routes/api.bedrock-converse-cache'
+import { Route as ApiBedrockConverseTruncatedToolCallRouteImport } from './routes/api.bedrock-converse-truncated-tool-call'
 import { Route as ApiByokChatRouteImport } from './routes/api.byok-chat'
 import { Route as ApiByteplusEncryptedReasoningWireRouteImport } from './routes/api.byteplus-encrypted-reasoning-wire'
 import { Route as ApiByteplusSeedance1080pWireRouteImport } from './routes/api.byteplus-seedance-1080p-wire'
@@ -74,6 +75,7 @@ import { Route as ApiChatRouteImport } from './routes/api.chat'
 import { Route as ApiChatCompletionsIncompleteStreamRouteImport } from './routes/api.chat-completions-incomplete-stream'
 import { Route as ApiClientToolResumeStoreRouteImport } from './routes/api.client-tool-resume-store'
 import { Route as ApiCloudflareBindingWireRouteImport } from './routes/api.cloudflare-binding-wire'
+import { Route as ApiCompactionUsageWireRouteImport } from './routes/api.compaction-usage-wire'
 import { Route as ApiCompactionWireRouteImport } from './routes/api.compaction-wire'
 import { Route as ApiContextOverflowRouteImport } from './routes/api.context-overflow'
 import { Route as ApiCopilotWireRouteImport } from './routes/api.copilot-wire'
@@ -479,6 +481,12 @@ const ApiBedrockConverseCacheRoute = ApiBedrockConverseCacheRouteImport.update({
   path: '/api/bedrock-converse-cache',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiBedrockConverseTruncatedToolCallRoute =
+  ApiBedrockConverseTruncatedToolCallRouteImport.update({
+    id: '/api/bedrock-converse-truncated-tool-call',
+    path: '/api/bedrock-converse-truncated-tool-call',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const ApiByokChatRoute = ApiByokChatRouteImport.update({
   id: '/api/byok-chat',
   path: '/api/byok-chat',
@@ -519,6 +527,11 @@ const ApiCloudflareBindingWireRoute =
     path: '/api/cloudflare-binding-wire',
     getParentRoute: () => rootRouteImport,
   } as any)
+const ApiCompactionUsageWireRoute = ApiCompactionUsageWireRouteImport.update({
+  id: '/api/compaction-usage-wire',
+  path: '/api/compaction-usage-wire',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiCompactionWireRoute = ApiCompactionWireRouteImport.update({
   id: '/api/compaction-wire',
   path: '/api/compaction-wire',
@@ -1112,6 +1125,7 @@ export interface FileRoutesByFullPath {
   '/api/audio': typeof ApiAudioRouteWithChildren
   '/api/azure-openai-wire': typeof ApiAzureOpenaiWireRoute
   '/api/bedrock-converse-cache': typeof ApiBedrockConverseCacheRoute
+  '/api/bedrock-converse-truncated-tool-call': typeof ApiBedrockConverseTruncatedToolCallRoute
   '/api/byok-chat': typeof ApiByokChatRoute
   '/api/byteplus-encrypted-reasoning-wire': typeof ApiByteplusEncryptedReasoningWireRoute
   '/api/byteplus-seedance-1080p-wire': typeof ApiByteplusSeedance1080pWireRoute
@@ -1119,6 +1133,7 @@ export interface FileRoutesByFullPath {
   '/api/chat-completions-incomplete-stream': typeof ApiChatCompletionsIncompleteStreamRoute
   '/api/client-tool-resume-store': typeof ApiClientToolResumeStoreRoute
   '/api/cloudflare-binding-wire': typeof ApiCloudflareBindingWireRoute
+  '/api/compaction-usage-wire': typeof ApiCompactionUsageWireRoute
   '/api/compaction-wire': typeof ApiCompactionWireRoute
   '/api/context-overflow': typeof ApiContextOverflowRoute
   '/api/copilot-wire': typeof ApiCopilotWireRoute
@@ -1281,6 +1296,7 @@ export interface FileRoutesByTo {
   '/api/audio': typeof ApiAudioRouteWithChildren
   '/api/azure-openai-wire': typeof ApiAzureOpenaiWireRoute
   '/api/bedrock-converse-cache': typeof ApiBedrockConverseCacheRoute
+  '/api/bedrock-converse-truncated-tool-call': typeof ApiBedrockConverseTruncatedToolCallRoute
   '/api/byok-chat': typeof ApiByokChatRoute
   '/api/byteplus-encrypted-reasoning-wire': typeof ApiByteplusEncryptedReasoningWireRoute
   '/api/byteplus-seedance-1080p-wire': typeof ApiByteplusSeedance1080pWireRoute
@@ -1288,6 +1304,7 @@ export interface FileRoutesByTo {
   '/api/chat-completions-incomplete-stream': typeof ApiChatCompletionsIncompleteStreamRoute
   '/api/client-tool-resume-store': typeof ApiClientToolResumeStoreRoute
   '/api/cloudflare-binding-wire': typeof ApiCloudflareBindingWireRoute
+  '/api/compaction-usage-wire': typeof ApiCompactionUsageWireRoute
   '/api/compaction-wire': typeof ApiCompactionWireRoute
   '/api/context-overflow': typeof ApiContextOverflowRoute
   '/api/copilot-wire': typeof ApiCopilotWireRoute
@@ -1451,6 +1468,7 @@ export interface FileRoutesById {
   '/api/audio': typeof ApiAudioRouteWithChildren
   '/api/azure-openai-wire': typeof ApiAzureOpenaiWireRoute
   '/api/bedrock-converse-cache': typeof ApiBedrockConverseCacheRoute
+  '/api/bedrock-converse-truncated-tool-call': typeof ApiBedrockConverseTruncatedToolCallRoute
   '/api/byok-chat': typeof ApiByokChatRoute
   '/api/byteplus-encrypted-reasoning-wire': typeof ApiByteplusEncryptedReasoningWireRoute
   '/api/byteplus-seedance-1080p-wire': typeof ApiByteplusSeedance1080pWireRoute
@@ -1458,6 +1476,7 @@ export interface FileRoutesById {
   '/api/chat-completions-incomplete-stream': typeof ApiChatCompletionsIncompleteStreamRoute
   '/api/client-tool-resume-store': typeof ApiClientToolResumeStoreRoute
   '/api/cloudflare-binding-wire': typeof ApiCloudflareBindingWireRoute
+  '/api/compaction-usage-wire': typeof ApiCompactionUsageWireRoute
   '/api/compaction-wire': typeof ApiCompactionWireRoute
   '/api/context-overflow': typeof ApiContextOverflowRoute
   '/api/copilot-wire': typeof ApiCopilotWireRoute
@@ -1622,6 +1641,7 @@ export interface FileRouteTypes {
     | '/api/audio'
     | '/api/azure-openai-wire'
     | '/api/bedrock-converse-cache'
+    | '/api/bedrock-converse-truncated-tool-call'
     | '/api/byok-chat'
     | '/api/byteplus-encrypted-reasoning-wire'
     | '/api/byteplus-seedance-1080p-wire'
@@ -1629,6 +1649,7 @@ export interface FileRouteTypes {
     | '/api/chat-completions-incomplete-stream'
     | '/api/client-tool-resume-store'
     | '/api/cloudflare-binding-wire'
+    | '/api/compaction-usage-wire'
     | '/api/compaction-wire'
     | '/api/context-overflow'
     | '/api/copilot-wire'
@@ -1791,6 +1812,7 @@ export interface FileRouteTypes {
     | '/api/audio'
     | '/api/azure-openai-wire'
     | '/api/bedrock-converse-cache'
+    | '/api/bedrock-converse-truncated-tool-call'
     | '/api/byok-chat'
     | '/api/byteplus-encrypted-reasoning-wire'
     | '/api/byteplus-seedance-1080p-wire'
@@ -1798,6 +1820,7 @@ export interface FileRouteTypes {
     | '/api/chat-completions-incomplete-stream'
     | '/api/client-tool-resume-store'
     | '/api/cloudflare-binding-wire'
+    | '/api/compaction-usage-wire'
     | '/api/compaction-wire'
     | '/api/context-overflow'
     | '/api/copilot-wire'
@@ -1960,6 +1983,7 @@ export interface FileRouteTypes {
     | '/api/audio'
     | '/api/azure-openai-wire'
     | '/api/bedrock-converse-cache'
+    | '/api/bedrock-converse-truncated-tool-call'
     | '/api/byok-chat'
     | '/api/byteplus-encrypted-reasoning-wire'
     | '/api/byteplus-seedance-1080p-wire'
@@ -1967,6 +1991,7 @@ export interface FileRouteTypes {
     | '/api/chat-completions-incomplete-stream'
     | '/api/client-tool-resume-store'
     | '/api/cloudflare-binding-wire'
+    | '/api/compaction-usage-wire'
     | '/api/compaction-wire'
     | '/api/context-overflow'
     | '/api/copilot-wire'
@@ -2130,6 +2155,7 @@ export interface RootRouteChildren {
   ApiAudioRoute: typeof ApiAudioRouteWithChildren
   ApiAzureOpenaiWireRoute: typeof ApiAzureOpenaiWireRoute
   ApiBedrockConverseCacheRoute: typeof ApiBedrockConverseCacheRoute
+  ApiBedrockConverseTruncatedToolCallRoute: typeof ApiBedrockConverseTruncatedToolCallRoute
   ApiByokChatRoute: typeof ApiByokChatRoute
   ApiByteplusEncryptedReasoningWireRoute: typeof ApiByteplusEncryptedReasoningWireRoute
   ApiByteplusSeedance1080pWireRoute: typeof ApiByteplusSeedance1080pWireRoute
@@ -2137,6 +2163,7 @@ export interface RootRouteChildren {
   ApiChatCompletionsIncompleteStreamRoute: typeof ApiChatCompletionsIncompleteStreamRoute
   ApiClientToolResumeStoreRoute: typeof ApiClientToolResumeStoreRoute
   ApiCloudflareBindingWireRoute: typeof ApiCloudflareBindingWireRoute
+  ApiCompactionUsageWireRoute: typeof ApiCompactionUsageWireRoute
   ApiCompactionWireRoute: typeof ApiCompactionWireRoute
   ApiContextOverflowRoute: typeof ApiContextOverflowRoute
   ApiCopilotWireRoute: typeof ApiCopilotWireRoute
@@ -2645,6 +2672,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiBedrockConverseCacheRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/bedrock-converse-truncated-tool-call': {
+      id: '/api/bedrock-converse-truncated-tool-call'
+      path: '/api/bedrock-converse-truncated-tool-call'
+      fullPath: '/api/bedrock-converse-truncated-tool-call'
+      preLoaderRoute: typeof ApiBedrockConverseTruncatedToolCallRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/byok-chat': {
       id: '/api/byok-chat'
       path: '/api/byok-chat'
@@ -2692,6 +2726,13 @@ declare module '@tanstack/react-router' {
       path: '/api/cloudflare-binding-wire'
       fullPath: '/api/cloudflare-binding-wire'
       preLoaderRoute: typeof ApiCloudflareBindingWireRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/compaction-usage-wire': {
+      id: '/api/compaction-usage-wire'
+      path: '/api/compaction-usage-wire'
+      fullPath: '/api/compaction-usage-wire'
+      preLoaderRoute: typeof ApiCompactionUsageWireRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/compaction-wire': {
@@ -3529,6 +3570,8 @@ const rootRouteChildren: RootRouteChildren = {
   ApiAudioRoute: ApiAudioRouteWithChildren,
   ApiAzureOpenaiWireRoute: ApiAzureOpenaiWireRoute,
   ApiBedrockConverseCacheRoute: ApiBedrockConverseCacheRoute,
+  ApiBedrockConverseTruncatedToolCallRoute:
+    ApiBedrockConverseTruncatedToolCallRoute,
   ApiByokChatRoute: ApiByokChatRoute,
   ApiByteplusEncryptedReasoningWireRoute:
     ApiByteplusEncryptedReasoningWireRoute,
@@ -3538,6 +3581,7 @@ const rootRouteChildren: RootRouteChildren = {
     ApiChatCompletionsIncompleteStreamRoute,
   ApiClientToolResumeStoreRoute: ApiClientToolResumeStoreRoute,
   ApiCloudflareBindingWireRoute: ApiCloudflareBindingWireRoute,
+  ApiCompactionUsageWireRoute: ApiCompactionUsageWireRoute,
   ApiCompactionWireRoute: ApiCompactionWireRoute,
   ApiContextOverflowRoute: ApiContextOverflowRoute,
   ApiCopilotWireRoute: ApiCopilotWireRoute,
