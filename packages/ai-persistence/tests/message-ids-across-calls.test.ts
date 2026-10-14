@@ -216,7 +216,7 @@ describe('useChat + withPersistence: message ids across model calls', () => {
   it('stores each tool result once when a run resumes from a client tool', async () => {
     const persistence = memoryPersistence()
     // Server tool, then a client tool that interrupts the run, then text.
-    const { adapter } = mockAdapter([
+    const { adapter, prompts } = mockAdapter([
       run('r1', toolCall('call_1', 'lookup', 'm1'), 'tool_calls'),
       run('r1', toolCall('call_2', 'ask', 'm2'), 'tool_calls'),
       run('r1', text('m3', 'done'), 'stop'),
@@ -272,6 +272,9 @@ describe('useChat + withPersistence: message ids across model calls', () => {
     )
     expect(
       stored.filter((m) => m.role === 'tool').map((m) => m.toolCallId),
+    ).toEqual(['call_1', 'call_2'])
+    expect(
+      prompts[2]!.filter((m) => m.role === 'tool').map((m) => m.toolCallId),
     ).toEqual(['call_1', 'call_2'])
   })
 })

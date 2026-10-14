@@ -115,7 +115,8 @@ function toolResultIds(body: { messages: Array<{ content: unknown }> }) {
  *
  * Before the fix, the store had never seen the snapshot id, so the merge
  * appended the server tool result a second time and the resumed call sent
- * Claude a `tool_result` with no `tool_use` before it.
+ * Claude a second `tool_result` for `toolu_lookup`, with no matching `tool_use`
+ * in the assistant turn before it.
  *
  * `StreamProcessor` → `uiMessagesToWire` → `chatParamsFromRequestBody` →
  * `chat()`, as a browser client and `/api/chat` do, answered by a capturing
