@@ -1,5 +1,5 @@
 ---
-'@tanstack/ai': patch
+'@tanstack/ai': minor
 '@tanstack/ai-persistence': patch
 ---
 
